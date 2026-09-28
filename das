@@ -2407,7 +2407,7 @@ do
     HitSoundGroup:AddSlider('HitSoundVolume', {Text='Volume', Default=1, Min=0.1, Max=5, Rounding=1})
 
     local HitNotifyGroup = Tabs.visuals:AddLeftGroupbox('Hit Notification')
-    HitNotifyGroup:AddToggle('HitNotifyToggle', {Text='Enable Hit Notify', Default=true})
+    HitNotifyGroup:AddToggle('HitNotifyToggle', {Text='Enable Hit Notify', Default=false})
 
     Toggles.HitSoundToggle:OnChanged(function()
         HitSndSettings.sound_enabled = Toggles.HitSoundToggle.Value
@@ -5946,11 +5946,11 @@ do
         Presets = {
             "get KraviX",
             "Get aim",
-            "BAG!",
+            "/KraviX",
             "KRAVIX DOMINATES",
             "too slow",
             "This isn’t a fight anymore — it’s a KraviX tutorial.",
-            "RUN MY DOG HAHAHAH",
+            "Bad",
             "go KraviX now"
         }
     }
