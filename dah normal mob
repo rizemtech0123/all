@@ -6686,14 +6686,12 @@ do
             end
         end
 
-        -- CENARIO 1: O jogador esta no mesmo servidor (Copia perfeita de UGC bundles, Care Bear, Korblox, roupas e membros)
         if inGamePlayer and inGamePlayer.Character then
             local targetChar = inGamePlayer.Character
             local targetHum = targetChar:FindFirstChildOfClass("Humanoid")
 
             clearCurrentClothingAndAccessories()
 
-            -- Copia BodyColors
             local targetColors = targetChar:FindFirstChildOfClass("BodyColors")
             local myColors = char:FindFirstChildOfClass("BodyColors")
             if targetColors then
@@ -6701,7 +6699,6 @@ do
                 targetColors:Clone().Parent = char
             end
 
-            -- Copia Roupas 2D e Acessorios 3D
             for _, item in pairs(targetChar:GetChildren()) do
                 if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") or item:IsA("CharacterMesh") then
                     item:Clone().Parent = char
@@ -6712,12 +6709,10 @@ do
                 end
             end
 
-            -- Copia Escalas Corporais (Body Scales)
             if targetHum then
                 applyScales(targetHum)
             end
 
-            -- Copia Membros e Meshes 3D (Care Bear, Chibi, Korblox, pacotes R15)
             local limbNames = {
                 "Head", "UpperTorso", "LowerTorso", "Torso",
                 "LeftUpperArm", "LeftLowerArm", "LeftHand", "Left Arm",
@@ -6740,7 +6735,6 @@ do
             return true
         end
 
-        -- CENARIO 2: O jogador esta offline / buscado via UserId
         if userId then
             local descSuccess, desc = pcall(function()
                 return Players:GetHumanoidDescriptionFromUserId(userId)
@@ -6881,7 +6875,6 @@ do
 
         local copied = false
 
-        -- 1. Se o player estiver no mesmo servidor, copia diretamente do Animate do personagem dele
         if inGamePlayer and inGamePlayer.Character then
             local targetAnimate = inGamePlayer.Character:FindFirstChild("Animate")
             if targetAnimate then
@@ -6908,7 +6901,6 @@ do
             end
         end
 
-        -- 2. Se nao estiver no servidor ou faltar IDs, tenta buscar pelo pacote de avatar via HumanoidDescription
         if not copied and userId then
             pcall(function()
                 local desc = Players:GetHumanoidDescriptionFromUserId(userId)
@@ -6957,7 +6949,6 @@ do
             end)
         end
 
-        -- 3. Reinicia o script Animate e para as tracks antigas para atualizar os movimentos imediatamente
         if copied then
             pcall(function()
                 if animator then
