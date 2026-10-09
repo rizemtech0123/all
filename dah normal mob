@@ -463,7 +463,7 @@ pcall(function()
         local origCanShoot = OriginalGetCanShoot or GunHandler.getCanShoot
         if type(origCanShoot) == "function" then
             GunHandler.getCanShoot = function(c, ...)
-                if Toggles and Toggles.EnableRapidFire and Toggles.EnableRapidFire.Value then
+                if Toggles and Toggles.EnableRapidFire and Toggles.EnableRapidFire.Value and _G._mobileRFActive == true then
                     return true
                 end
                 return origCanShoot(c, ...)
@@ -1890,7 +1890,7 @@ GunModsGroup:AddToggle('EnableRapidFire', {Text='Enable Rapid Fire', Default=fal
 GunModsGroup:AddSlider('RapidFireDelay', {Text='Rapid Fire Delay', Default=0.08, Min=0.001, Max=0.5, Rounding=3})
 
 local State_RF = {
-    rapidFireHooks = {},
+    patchedTools = {},
     rapidFireChildConns = {},
     isHolding = false
 }
@@ -1901,18 +1901,15 @@ local Refs_RF = {
 
 local function hookToolForRapidFire(tool)
     if not tool or not tool:IsA("Tool") then return end
+    if State_RF.patchedTools[tool] then return end
+
     local getconnections = getconnections or (debug and debug.getconnections)
     local getinfo = debug.getinfo or (debug and debug.getinfo)
     local getupvalue = debug.getupvalue or (debug and debug.getupvalue)
     local setupvalue = debug.setupvalue or (debug and debug.setupvalue)
-
-    local cd = tool:FindFirstChild("Cooldown") or tool:FindFirstChild("FireRate")
-    if cd and cd:IsA("NumberValue") then
-        pcall(function() cd.Value = 0 end)
-    end
-
     if not getconnections or not getinfo or not getupvalue or not setupvalue then return end
 
+    local toolHooks = {}
     pcall(function()
         local conns = getconnections(tool.Activated)
         if not conns or #conns == 0 then
@@ -1926,8 +1923,8 @@ local function hookToolForRapidFire(tool)
                 if info then
                     for i = 1, info.nups do
                         local v = getupvalue(conn.Function, i)
-                        if type(v) == "number" then
-                            table.insert(State_RF.rapidFireHooks, {conn = conn, fn = conn.Function, index = i, original = v})
+                        if type(v) == "number" and v > 0 then
+                            table.insert(toolHooks, {fn = conn.Function, index = i, original = v})
                             setupvalue(conn.Function, i, 0)
                         end
                     end
@@ -1935,6 +1932,64 @@ local function hookToolForRapidFire(tool)
             end
         end
     end)
+    State_RF.patchedTools[tool] = toolHooks
+end
+
+local function unhookAllTools()
+    local setupvalue = debug.setupvalue or (debug and debug.setupvalue)
+    for tool, hooks in pairs(State_RF.patchedTools) do
+        for _, hook in ipairs(hooks) do
+            pcall(function()
+                if setupvalue and hook.fn and hook.original and hook.original > 0 then
+                    setupvalue(hook.fn, hook.index, hook.original)
+                end
+            end)
+        end
+    end
+    State_RF.patchedTools = {}
+end
+
+local function patchAllCurrentTools()
+    local c = LocalPlayer.Character
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if c then
+        for _, t in ipairs(c:GetChildren()) do
+            if t:IsA("Tool") then hookToolForRapidFire(t) end
+        end
+    end
+    if bp then
+        for _, t in ipairs(bp:GetChildren()) do
+            if t:IsA("Tool") then hookToolForRapidFire(t) end
+        end
+    end
+end
+
+local function setupRapidFireConnections()
+    for _, conn in ipairs(State_RF.rapidFireChildConns) do
+        if conn and conn.Disconnect then pcall(function() conn:Disconnect() end) end
+    end
+    State_RF.rapidFireChildConns = {}
+
+    local c = LocalPlayer.Character
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if c then
+        local conn = c.ChildAdded:Connect(function(child)
+            if child:IsA("Tool") and Toggles.EnableRapidFire and Toggles.EnableRapidFire.Value and _G._mobileRFActive == true then
+                task.wait(0.05)
+                hookToolForRapidFire(child)
+            end
+        end)
+        table.insert(State_RF.rapidFireChildConns, conn)
+    end
+    if bp then
+        local conn = bp.ChildAdded:Connect(function(child)
+            if child:IsA("Tool") and Toggles.EnableRapidFire and Toggles.EnableRapidFire.Value and _G._mobileRFActive == true then
+                task.wait(0.05)
+                hookToolForRapidFire(child)
+            end
+        end)
+        table.insert(State_RF.rapidFireChildConns, conn)
+    end
 end
 
 local function startRapidFireLoop()
@@ -1943,7 +1998,8 @@ local function startRapidFireLoop()
     Refs_RF.rapidFireLoopThread = task.spawn(function()
         while Refs_RF.rapidFireLoopRunning do
             local isPressed = State_RF.isHolding or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-            if isPressed and Toggles.EnableRapidFire.Value then
+            local isRfActive = Toggles.EnableRapidFire and Toggles.EnableRapidFire.Value and _G._mobileRFActive == true
+            if isPressed and isRfActive then
                 local c = LocalPlayer.Character
                 if c then
                     local t = c:FindFirstChildOfClass("Tool")
@@ -1969,12 +2025,29 @@ local function stopRapidFireLoop()
     end
 end
 
+local function setRapidFireState(active)
+    _G._mobileRFActive = active
+    if active then
+        patchAllCurrentTools()
+        setupRapidFireConnections()
+        startRapidFireLoop()
+    else
+        State_RF.isHolding = false
+        stopRapidFireLoop()
+        unhookAllTools()
+    end
+end
+_G._setRapidFireState = setRapidFireState
+
 local function applyRapidFire()
+    local enabled = Toggles.EnableRapidFire and Toggles.EnableRapidFire.Value == true
+    setRapidFireState(enabled)
+
     if GunHandler then
         local origCanShoot = OriginalGetCanShoot or GunHandler.getCanShoot
         if type(origCanShoot) == "function" then
             GunHandler.getCanShoot = function(c, ...)
-                if Toggles and Toggles.EnableRapidFire and Toggles.EnableRapidFire.Value then
+                if Toggles and Toggles.EnableRapidFire and Toggles.EnableRapidFire.Value and _G._mobileRFActive == true then
                     return true
                 end
                 return origCanShoot(c, ...)
@@ -1982,55 +2055,21 @@ local function applyRapidFire()
         end
     end
 
-    local setupvalue = debug.setupvalue or (debug and debug.setupvalue)
-    for _, hook in ipairs(State_RF.rapidFireHooks) do
-        pcall(function()
-            if setupvalue and hook.fn then
-                setupvalue(hook.fn, hook.index, hook.original)
-            end
-        end)
-    end
-    State_RF.rapidFireHooks = {}
-    for _, conn in ipairs(State_RF.rapidFireChildConns) do
-        if conn and conn.Disconnect then pcall(function() conn:Disconnect() end) end
-    end
-    State_RF.rapidFireChildConns = {}
-    stopRapidFireLoop()
-
-    if not Toggles.EnableRapidFire.Value then
+    if not enabled then
         if GunHandler and OriginalGetCanShoot then
             GunHandler.getCanShoot = OriginalGetCanShoot
         end
-        return
     end
-
-    local c = LocalPlayer.Character
-    local bp = LocalPlayer:FindFirstChild("Backpack")
-    if c then
-        for _, t in ipairs(c:GetChildren()) do hookToolForRapidFire(t) end
-        local conn = c.ChildAdded:Connect(function(child)
-            if child:IsA("Tool") then task.wait(0.1); hookToolForRapidFire(child) end
-        end)
-        table.insert(State_RF.rapidFireChildConns, conn)
-    end
-    if bp then
-        for _, t in ipairs(bp:GetChildren()) do hookToolForRapidFire(t) end
-        local conn = bp.ChildAdded:Connect(function(child)
-            if child:IsA("Tool") then task.wait(0.1); hookToolForRapidFire(child) end
-        end)
-        table.insert(State_RF.rapidFireChildConns, conn)
-    end
-    startRapidFireLoop()
 end
 
 UserInputService.InputBegan:Connect(function(input, gp)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    if not gp and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
         State_RF.isHolding = true
     end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         State_RF.isHolding = false
     end
 end)
@@ -6559,60 +6598,392 @@ end
 do
     local ExtraGroup = Tabs.character:AddRightGroupbox('Extra')
 
-    local function MorphSkinByUserId(userId)
+    local function MorphPlayerSkinAndBody(inGamePlayer, userId)
         local char = LocalPlayer.Character
-        if not char then return end
+        if not char then return false end
         local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum then return end
+        if not hum then return false end
 
-        local success, appearance = pcall(function()
-            return Players:GetCharacterAppearanceAsync(userId)
-        end)
-        if not success or not appearance then
-            Library:Notify("Error loading skin for UserId: " .. tostring(userId), 3)
-            return false
-        end
-
-        for _, v in pairs(char:GetChildren()) do
-            if v:IsA("Accessory") or v:IsA("Shirt") or v:IsA("Pants") or v:IsA("CharacterMesh") or v:IsA("BodyColors") then
-                v:Destroy()
-            end
-        end
-        if char:FindFirstChild("Head") and char.Head:FindFirstChild("face") then
-            char.Head.face:Destroy()
-        end
-
-        for _, v in pairs(appearance:GetChildren()) do
-            if v:IsA("Shirt") or v:IsA("Pants") or v:IsA("BodyColors") then
-                v.Parent = char
-            elseif v:IsA("Accessory") then
-                hum:AddAccessory(v)
-            elseif v.Name == "R15" and hum.RigType == Enum.HumanoidRigType.R15 then
-                local mesh = v:FindFirstChildOfClass("CharacterMesh")
-                if mesh then mesh.Parent = char end
+        local function applyScales(sourceHum)
+            if not sourceHum or hum.RigType ~= Enum.HumanoidRigType.R15 then return end
+            local scaleNames = {
+                "BodyHeightScale", "BodyWidthScale", "BodyDepthScale",
+                "HeadScale", "BodyTypeScale", "BodyProportionsScale"
+            }
+            for _, sName in ipairs(scaleNames) do
+                local sVal = sourceHum:FindFirstChild(sName)
+                if sVal and sVal:IsA("NumberValue") then
+                    local myVal = hum:FindFirstChild(sName)
+                    if myVal and myVal:IsA("NumberValue") then
+                        myVal.Value = sVal.Value
+                    elseif not myVal then
+                        local newVal = sVal:Clone()
+                        newVal.Parent = hum
+                    end
+                end
             end
         end
 
-        if appearance:FindFirstChild("face") then
-            appearance.face.Parent = char.Head
-        else
-            local face = Instance.new("Decal")
-            face.Face = Enum.NormalId.Front
-            face.Name = "face"
-            face.Texture = "rbxasset://textures/face.png"
-            face.Parent = char.Head
+        local function copyLimbVisual(targetPart, myPart)
+            if not targetPart or not myPart then return end
+
+            if targetPart.Name == "Head" then
+                local targetFace = targetPart:FindFirstChild("face")
+                local myFace = myPart:FindFirstChild("face")
+                if targetFace and targetFace:IsA("Decal") then
+                    if not myFace then
+                        myFace = Instance.new("Decal")
+                        myFace.Name = "face"
+                        myFace.Face = Enum.NormalId.Front
+                        myFace.Parent = myPart
+                    end
+                    myFace.Texture = targetFace.Texture
+                    myFace.Transparency = targetFace.Transparency
+                end
+
+                local targetMesh = targetPart:FindFirstChildOfClass("SpecialMesh")
+                if targetMesh then
+                    local myMesh = myPart:FindFirstChildOfClass("SpecialMesh") or Instance.new("SpecialMesh")
+                    myMesh.MeshType = targetMesh.MeshType
+                    myMesh.MeshId = targetMesh.MeshId
+                    myMesh.TextureId = targetMesh.TextureId
+                    myMesh.Scale = targetMesh.Scale
+                    myMesh.Offset = targetMesh.Offset
+                    myMesh.Parent = myPart
+                end
+            else
+                local targetMesh = targetPart:FindFirstChildOfClass("SpecialMesh")
+                if targetMesh then
+                    local myMesh = myPart:FindFirstChildOfClass("SpecialMesh") or Instance.new("SpecialMesh")
+                    myMesh.MeshType = targetMesh.MeshType
+                    myMesh.MeshId = targetMesh.MeshId
+                    myMesh.TextureId = targetMesh.TextureId
+                    myMesh.Scale = targetMesh.Scale
+                    myMesh.Offset = targetMesh.Offset
+                    myMesh.Parent = myPart
+                elseif targetPart:IsA("MeshPart") then
+                    local myMesh = myPart:FindFirstChildOfClass("SpecialMesh") or Instance.new("SpecialMesh")
+                    myMesh.MeshType = Enum.MeshType.FileMesh
+                    myMesh.MeshId = targetPart.MeshId
+                    myMesh.TextureId = targetPart.TextureID
+                    myMesh.Scale = Vector3.new(1, 1, 1)
+                    myMesh.Parent = myPart
+                end
+            end
+
+            pcall(function()
+                myPart.Color = targetPart.Color
+                myPart.Material = targetPart.Material
+                myPart.Transparency = targetPart.Transparency
+            end)
         end
 
-        local parent = char.Parent
-        char.Parent = nil
-        char.Parent = parent
-        return true
+        local function clearCurrentClothingAndAccessories()
+            for _, v in pairs(char:GetChildren()) do
+                if v:IsA("Accessory") or v:IsA("Shirt") or v:IsA("Pants") or v:IsA("CharacterMesh") or v:IsA("ShirtGraphic") then
+                    v:Destroy()
+                end
+            end
+        end
+
+        -- CENARIO 1: O jogador esta no mesmo servidor (Copia perfeita de UGC bundles, Care Bear, Korblox, roupas e membros)
+        if inGamePlayer and inGamePlayer.Character then
+            local targetChar = inGamePlayer.Character
+            local targetHum = targetChar:FindFirstChildOfClass("Humanoid")
+
+            clearCurrentClothingAndAccessories()
+
+            -- Copia BodyColors
+            local targetColors = targetChar:FindFirstChildOfClass("BodyColors")
+            local myColors = char:FindFirstChildOfClass("BodyColors")
+            if targetColors then
+                if myColors then myColors:Destroy() end
+                targetColors:Clone().Parent = char
+            end
+
+            -- Copia Roupas 2D e Acessorios 3D
+            for _, item in pairs(targetChar:GetChildren()) do
+                if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") or item:IsA("CharacterMesh") then
+                    item:Clone().Parent = char
+                elseif item:IsA("Accessory") then
+                    pcall(function()
+                        hum:AddAccessory(item:Clone())
+                    end)
+                end
+            end
+
+            -- Copia Escalas Corporais (Body Scales)
+            if targetHum then
+                applyScales(targetHum)
+            end
+
+            -- Copia Membros e Meshes 3D (Care Bear, Chibi, Korblox, pacotes R15)
+            local limbNames = {
+                "Head", "UpperTorso", "LowerTorso", "Torso",
+                "LeftUpperArm", "LeftLowerArm", "LeftHand", "Left Arm",
+                "RightUpperArm", "RightLowerArm", "RightHand", "Right Arm",
+                "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "Left Leg",
+                "RightUpperLeg", "RightLowerLeg", "RightFoot", "Right Leg"
+            }
+
+            for _, limbName in ipairs(limbNames) do
+                local targetLimb = targetChar:FindFirstChild(limbName)
+                local myLimb = char:FindFirstChild(limbName)
+                if targetLimb and myLimb then
+                    copyLimbVisual(targetLimb, myLimb)
+                end
+            end
+
+            local parent = char.Parent
+            char.Parent = nil
+            char.Parent = parent
+            return true
+        end
+
+        -- CENARIO 2: O jogador esta offline / buscado via UserId
+        if userId then
+            local descSuccess, desc = pcall(function()
+                return Players:GetHumanoidDescriptionFromUserId(userId)
+            end)
+
+            if descSuccess and desc then
+                local appliedNative = pcall(function()
+                    hum:ApplyDescription(desc)
+                end)
+
+                if appliedNative then
+                    local parent = char.Parent
+                    char.Parent = nil
+                    char.Parent = parent
+                    return true
+                end
+
+                local function getDescVal(prop)
+                    local ok, val = pcall(function() return desc[prop] end)
+                    return (ok and val) or nil
+                end
+
+                if hum.RigType == Enum.HumanoidRigType.R15 then
+                    local scaleProps = {
+                        BodyHeightScale = getDescVal("HeightScale"),
+                        BodyWidthScale = getDescVal("WidthScale"),
+                        BodyDepthScale = getDescVal("DepthScale"),
+                        HeadScale = getDescVal("HeadScale"),
+                        BodyTypeScale = getDescVal("BodyTypeScale"),
+                        BodyProportionsScale = getDescVal("ProportionScale") or getDescVal("ProportionsScale"),
+                    }
+                    for name, val in pairs(scaleProps) do
+                        if val and type(val) == "number" and val > 0 then
+                            local sVal = hum:FindFirstChild(name)
+                            if sVal and sVal:IsA("NumberValue") then
+                                sVal.Value = val
+                            elseif not sVal then
+                                local newVal = Instance.new("NumberValue")
+                                newVal.Name = name
+                                newVal.Value = val
+                                newVal.Parent = hum
+                            end
+                        end
+                    end
+                end
+
+                local bodyBundleParts = {
+                    { id = getDescVal("Torso"), parts = {"UpperTorso", "LowerTorso", "Torso"} },
+                    { id = getDescVal("LeftArm"), parts = {"LeftUpperArm", "LeftLowerArm", "LeftHand", "Left Arm"} },
+                    { id = getDescVal("RightArm"), parts = {"RightUpperArm", "RightLowerArm", "RightHand", "Right Arm"} },
+                    { id = getDescVal("LeftLeg"), parts = {"LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "Left Leg"} },
+                    { id = getDescVal("RightLeg"), parts = {"RightUpperLeg", "RightLowerLeg", "RightFoot", "Right Leg"} },
+                    { id = getDescVal("Head"), parts = {"Head"} },
+                }
+
+                for _, bundleInfo in ipairs(bodyBundleParts) do
+                    if bundleInfo.id and bundleInfo.id > 0 then
+                        pcall(function()
+                            local objs = game:GetObjects("rbxassetid://" .. tostring(bundleInfo.id))
+                            if objs and #objs > 0 then
+                                for _, partName in ipairs(bundleInfo.parts) do
+                                    local myLimb = char:FindFirstChild(partName)
+                                    if myLimb then
+                                        for _, item in pairs(objs[1]:GetDescendants()) do
+                                            if item:IsA("SpecialMesh") then
+                                                local myMesh = myLimb:FindFirstChildOfClass("SpecialMesh") or Instance.new("SpecialMesh")
+                                                myMesh.MeshType = item.MeshType
+                                                myMesh.MeshId = item.MeshId
+                                                myMesh.TextureId = item.TextureId
+                                                myMesh.Scale = item.Scale
+                                                myMesh.Offset = item.Offset
+                                                myMesh.Parent = myLimb
+                                            elseif item:IsA("MeshPart") and item.Name:lower():find(partName:lower()) then
+                                                local myMesh = myLimb:FindFirstChildOfClass("SpecialMesh") or Instance.new("SpecialMesh")
+                                                myMesh.MeshType = Enum.MeshType.FileMesh
+                                                myMesh.MeshId = item.MeshId
+                                                myMesh.TextureId = item.TextureID
+                                                myMesh.Scale = Vector3.new(1, 1, 1)
+                                                myMesh.Parent = myLimb
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end)
+                    end
+                end
+            end
+
+            local success, appearance = pcall(function()
+                return Players:GetCharacterAppearanceAsync(userId)
+            end)
+            if success and appearance then
+                clearCurrentClothingAndAccessories()
+
+                for _, v in pairs(appearance:GetChildren()) do
+                    if v:IsA("Shirt") or v:IsA("Pants") or v:IsA("BodyColors") then
+                        v.Parent = char
+                    elseif v:IsA("Accessory") then
+                        pcall(function() hum:AddAccessory(v) end)
+                    elseif v.Name == "R15" and hum.RigType == Enum.HumanoidRigType.R15 then
+                        local mesh = v:FindFirstChildOfClass("CharacterMesh")
+                        if mesh then mesh.Parent = char end
+                    end
+                end
+
+                if appearance:FindFirstChild("face") then
+                    appearance.face.Parent = char.Head
+                elseif not char.Head:FindFirstChild("face") then
+                    local face = Instance.new("Decal")
+                    face.Face = Enum.NormalId.Front
+                    face.Name = "face"
+                    face.Texture = "rbxasset://textures/face.png"
+                    face.Parent = char.Head
+                end
+
+                local parent = char.Parent
+                char.Parent = nil
+                char.Parent = parent
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function MorphSkinByUserId(userId)
+        return MorphPlayerSkinAndBody(nil, userId)
+    end
+
+    local function CopyAnimationsFromPlayer(inGamePlayer, userId)
+        local char = LocalPlayer.Character
+        if not char then return false end
+        local myAnimate = char:FindFirstChild("Animate")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        local animator = hum and hum:FindFirstChildOfClass("Animator")
+        if not myAnimate then return false end
+
+        local copied = false
+
+        -- 1. Se o player estiver no mesmo servidor, copia diretamente do Animate do personagem dele
+        if inGamePlayer and inGamePlayer.Character then
+            local targetAnimate = inGamePlayer.Character:FindFirstChild("Animate")
+            if targetAnimate then
+                local animCategories = {"idle", "walk", "run", "jump", "fall", "climb", "swim", "toolnone"}
+                for _, cat in ipairs(animCategories) do
+                    local targetCat = targetAnimate:FindFirstChild(cat)
+                    local myCat = myAnimate:FindFirstChild(cat)
+                    if targetCat and myCat then
+                        for _, targetAnim in pairs(targetCat:GetChildren()) do
+                            if targetAnim:IsA("Animation") and targetAnim.AnimationId and targetAnim.AnimationId ~= "" then
+                                local myAnim = myCat:FindFirstChild(targetAnim.Name)
+                                if myAnim and myAnim:IsA("Animation") then
+                                    myAnim.AnimationId = targetAnim.AnimationId
+                                    copied = true
+                                elseif not myAnim then
+                                    local clone = targetAnim:Clone()
+                                    clone.Parent = myCat
+                                    copied = true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- 2. Se nao estiver no servidor ou faltar IDs, tenta buscar pelo pacote de avatar via HumanoidDescription
+        if not copied and userId then
+            pcall(function()
+                local desc = Players:GetHumanoidDescriptionFromUserId(userId)
+                if not desc then return end
+
+                local animPackages = {
+                    { id = desc.IdleAnimation, folders = {"idle"} },
+                    { id = desc.WalkAnimation, folders = {"walk"} },
+                    { id = desc.RunAnimation,  folders = {"run"} },
+                    { id = desc.JumpAnimation, folders = {"jump"} },
+                    { id = desc.FallAnimation, folders = {"fall"} },
+                    { id = desc.ClimbAnimation, folders = {"climb"} },
+                    { id = desc.SwimAnimation, folders = {"swim"} },
+                }
+
+                for _, pkg in ipairs(animPackages) do
+                    if pkg.id and pkg.id > 0 then
+                        local ok, objs = pcall(function()
+                            return game:GetObjects("rbxassetid://" .. tostring(pkg.id))
+                        end)
+                        if ok and objs and #objs > 0 then
+                            for _, folderName in ipairs(pkg.folders) do
+                                local myCat = myAnimate:FindFirstChild(folderName)
+                                if myCat then
+                                    for _, item in pairs(objs[1]:GetDescendants()) do
+                                        if item:IsA("Animation") and item.AnimationId and item.AnimationId ~= "" then
+                                            local myAnim = myCat:FindFirstChild(item.Name) or myCat:FindFirstChildOfClass("Animation")
+                                            if myAnim then
+                                                myAnim.AnimationId = item.AnimationId
+                                                copied = true
+                                            end
+                                        end
+                                    end
+                                    if objs[1]:IsA("Animation") and objs[1].AnimationId ~= "" then
+                                        local myAnim = myCat:FindFirstChildOfClass("Animation")
+                                        if myAnim then
+                                            myAnim.AnimationId = objs[1].AnimationId
+                                            copied = true
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+
+        -- 3. Reinicia o script Animate e para as tracks antigas para atualizar os movimentos imediatamente
+        if copied then
+            pcall(function()
+                if animator then
+                    for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+                        track:Stop(0)
+                    end
+                end
+                myAnimate.Disabled = true
+                task.wait(0.05)
+                myAnimate.Disabled = false
+            end)
+        end
+
+        return copied
     end
 
     local skinUsernameInput = ExtraGroup:AddInput("SkinUsernameInput", {
         Text = "",
         Placeholder = "Enter Roblox Username...",
         Default = ""
+    })
+
+    ExtraGroup:AddToggle("CopyAnimationsToggle", {
+        Text = "Copy Animations",
+        Default = true,
+        Tooltip = "Also copy walking/idle/jump animations when copying skin"
     })
 
     ExtraGroup:AddButton({
@@ -6632,6 +7003,16 @@ do
                 if inGamePlayer then
                     userId = inGamePlayer.UserId
                 else
+                    for _, p in pairs(Players:GetPlayers()) do
+                        if p.Name:lower() == targetName:lower() or p.DisplayName:lower() == targetName:lower() then
+                            inGamePlayer = p
+                            userId = p.UserId
+                            break
+                        end
+                    end
+                end
+
+                if not userId then
                     local ok, res = pcall(function()
                         return Players:GetUserIdFromNameAsync(targetName)
                     end)
@@ -6640,14 +7021,28 @@ do
                     end
                 end
 
-                if not userId then
+                if not userId and not inGamePlayer then
                     Library:Notify("User '" .. targetName .. "' not found!", 4)
                     return
                 end
 
-                local applied = MorphSkinByUserId(userId)
-                if applied then
-                    Library:Notify("Skin of @" .. targetName .. " copied!", 4)
+                local appliedSkin = MorphPlayerSkinAndBody(inGamePlayer, userId)
+                if appliedSkin then
+                    task.wait(0.1)
+                end
+
+                local copyAnims = Toggles.CopyAnimationsToggle and Toggles.CopyAnimationsToggle.Value
+                local appliedAnims = false
+                if copyAnims then
+                    appliedAnims = CopyAnimationsFromPlayer(inGamePlayer, userId)
+                end
+
+                if appliedSkin and appliedAnims then
+                    Library:Notify("Skin, Body & Animations of @" .. targetName .. " copied!", 4)
+                elseif appliedSkin then
+                    Library:Notify("Skin & Body of @" .. targetName .. " copied!", 4)
+                elseif appliedAnims then
+                    Library:Notify("Animations of @" .. targetName .. " copied!", 4)
                 end
             end)
         end
@@ -7170,15 +7565,20 @@ LocalPlayer.CharacterAdded:Connect(function()
     reapplyAllAnimations()
 end)
 
-local colorfromrgb = Color3.fromRGB
+local colorfromrgb = function(r, g, b)
+    if typeof(Color3) == "table" and type(Color3.fromRGB) == "function" then
+        return Color3.fromRGB(r, g, b)
+    end
+    return Color3.new((r or 0)/255, (g or 0)/255, (b or 0)/255)
+end
 local function newObject(class, properties)
     local object = Instance.new(class)
-    for property, value in pairs(properties) do
+    for property, value in pairs(properties or {}) do
         if property ~= "Name" then
             pcall(function() object[property] = value end)
         end
     end
-    object.Name = properties["Name"] or ""
+    object.Name = (properties and properties["Name"]) or ""
     return object
 end
 
@@ -7186,6 +7586,7 @@ local skins = {
     equipped = {}
 }
 
+pcall(function()
 skins["RGB Dual Bayonets"] = {
     Beam = {
         Color = ColorSequence.new{
@@ -7468,6 +7869,7 @@ skins["Snow Wrap"] = {
         ZOffset = 1
     })
 }
+end)
 
 local custom_skins = {}
 local skin_table = {}
@@ -7671,7 +8073,7 @@ local function getSkinOptionsForWeapon(wep)
     local cleanWep = wep:gsub("[%[%]]", "")
     local bracketWep = "[" .. cleanWep .. "]"
     
-    local targetTable = skin_table[wep] or skin_table[bracketWep] or skin_table[cleanWep]
+    local targetTable = skin_table and (skin_table[wep] or skin_table[bracketWep] or skin_table[cleanWep])
     if targetTable then
         for skinName in pairs(targetTable) do
             table.insert(options, skinName)
@@ -11545,6 +11947,7 @@ task.spawn(function()
     local COLOR_ON_TRACER = Color3.fromRGB(220, 120, 20)
     local COLOR_ON_STRAFE = Color3.fromRGB(30, 160, 90)
     local COLOR_ON_RAG    = Color3.fromRGB(180, 30, 30)
+    local COLOR_ON_RAPID  = Color3.fromRGB(240, 110, 20)
 
     local function tweenBg(frame, color)
         TweenService:Create(frame, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {BackgroundColor3 = color}):Play()
@@ -11625,6 +12028,18 @@ task.spawn(function()
 
     local vp = workspace.CurrentCamera.ViewportSize
 
+    local isInitOn = Toggles.EnableRapidFire and Toggles.EnableRapidFire.Value == true
+    local rapidOn = isInitOn
+    _G._mobileRFActive = isInitOn
+    local lastRfe = isInitOn
+
+    local rapidFrame, rapidBtn, rapidWasClick, rapidClearClick =
+        makeDraggableBtn("RapidFireMobileBtn", isInitOn and "Rapid Fire: ON" or "Rapid Fire: OFF", vp.X - 165, vp.Y - 216)
+    rapidFrame.Visible = isInitOn
+    if isInitOn then
+        rapidFrame.BackgroundColor3 = COLOR_ON_RAPID
+    end
+
     local camFrame, camBtn, camWasClick, camClearClick =
         makeDraggableBtn("CamLockMobileBtn", "CamLock: OFF", vp.X - 165, vp.Y - 164)
 
@@ -11633,6 +12048,19 @@ task.spawn(function()
 
     local rageFrame, rageBtn, rageWasClick, rageClearClick =
         makeDraggableBtn("RagebotMobileBtn", "Ragebot: OFF", vp.X - 165, vp.Y - 60)
+
+    rapidBtn.MouseButton1Click:Connect(function()
+        if not rapidWasClick() then return end
+        rapidClearClick()
+        rapidOn = not rapidOn
+        if _G._setRapidFireState then
+            _G._setRapidFireState(rapidOn)
+        else
+            _G._mobileRFActive = rapidOn
+        end
+        rapidBtn.Text = rapidOn and "Rapid Fire: ON" or "Rapid Fire: OFF"
+        tweenBg(rapidFrame, rapidOn and COLOR_ON_RAPID or COLOR_OFF)
+    end)
 
     local camOn = false
     camBtn.MouseButton1Click:Connect(function()
@@ -11677,7 +12105,21 @@ task.spawn(function()
     end)
 
     RunService.Heartbeat:Connect(function()
-        
+        local rfe = Toggles.EnableRapidFire and Toggles.EnableRapidFire.Value == true
+        rapidFrame.Visible = rfe
+        if rfe and not lastRfe then
+            rapidOn = true
+            if _G._setRapidFireState then _G._setRapidFireState(true) else _G._mobileRFActive = true end
+            rapidBtn.Text = "Rapid Fire: ON"
+            tweenBg(rapidFrame, COLOR_ON_RAPID)
+        elseif not rfe and lastRfe then
+            rapidOn = false
+            if _G._setRapidFireState then _G._setRapidFireState(false) else _G._mobileRFActive = false end
+            rapidBtn.Text = "Rapid Fire: OFF"
+            rapidFrame.BackgroundColor3 = COLOR_OFF
+        end
+        lastRfe = rfe
+
         local ce = Toggles.EnableCamLock and Toggles.EnableCamLock.Value == true
         camFrame.Visible = ce
         if not ce and camOn then
@@ -11691,7 +12133,6 @@ task.spawn(function()
             camFrame.BackgroundColor3 = COLOR_OFF
         end
 
-        
         local se = Toggles.TargetStrafeToggle and Toggles.TargetStrafeToggle.Value == true
         strafeFrame.Visible = se
         if not se and strafeOn then
@@ -11710,7 +12151,6 @@ task.spawn(function()
             end
         end
 
-        
         local re = Toggles.ragebotenabled and Toggles.ragebotenabled.Value == true
         rageFrame.Visible = re
         if not re and rageOn then
