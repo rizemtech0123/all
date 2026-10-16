@@ -312,7 +312,7 @@ end)
 Workspace.FallenPartsDestroyHeight = 0/0
 
 pcall(function()
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/sixsdev/KX-stand/refs/heads/main/code"))()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/rizemtech0123/code/refs/heads/main/code"))()
 end)
 
 local hasSentKOMessage = false
