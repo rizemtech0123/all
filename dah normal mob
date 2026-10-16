@@ -9678,7 +9678,7 @@ do
     local BURST_PACKETS = 2
 
     pcall(function()
-        RagebotGroupBox:AddToggle('RbResolver',{Text='Resolver (All-in-One)',Default=true,
+        RagebotGroupBox:AddToggle('RbResolver',{Text='Resolver',Default=true,
             Callback=function(v) _G.rb_resolverEnabled=v end})
         RagebotGroupBox:AddToggle('VoidBait',{Text='Void Bait',Default=false,
             Callback=function(v) _G.rb_voidBait=v end})
