@@ -831,6 +831,433 @@ local function removeGunHandlerHook()
     end
 end
 
+do
+    local dynamicAnchor = workspace:FindFirstChild("Dynamic_Anchor")
+    if not dynamicAnchor then
+        dynamicAnchor = Instance.new("Part")
+        dynamicAnchor.Name = "Dynamic_Anchor"
+        dynamicAnchor.Size = Vector3.new(2, 2, 1)
+        dynamicAnchor.Anchored = true
+        dynamicAnchor.CanCollide = false
+        dynamicAnchor.Transparency = 1
+        dynamicAnchor.Parent = workspace
+    end
+
+    local ragebotGuns = {
+        ["[LMG]"] = true,
+        ["[Rifle]"] = true,
+        ["[Revolver]"] = true,
+        ["[DoubleBarrel]"] = true,
+        ["[AUG]"] = true,
+        ["[P90]"] = true,
+        ["[AK47]"] = true,
+        ["[SMG]"] = true,
+        ["[Silencer]"] = true,
+        ["[Shotgun]"] = true,
+        ["[TacticalShotgun]"] = true,
+        ["[Glock]"] = true,
+    }
+
+    local function isRagebotGun(tool)
+        return tool and tool:IsA("Tool") and ragebotGuns[tool.Name]
+    end
+
+    local fireCooldown    = 0.01
+    local offsetHeight    = 9
+    local switchThreshold = 40
+
+    local rbHoldState = {
+        active          = false,
+        targetPlayer    = nil,
+        targetCFrame    = nil,
+        lastFire        = 0,
+        isReloadingSafe = false,
+    }
+
+    local function hookToolDisabled(tool)
+        if not isRagebotGun(tool) then return end
+        if tool.Enabled then
+            tool.Enabled = false
+        end
+        if not tool:GetAttribute("DynamicHooked") then
+            tool:SetAttribute("DynamicHooked", true)
+            tool:GetPropertyChangedSignal("Enabled"):Connect(function()
+                if Toggles.EnableAutoKill and Toggles.EnableAutoKill.Value and tool.Enabled then
+                    tool.Enabled = false
+                end
+            end)
+        end
+    end
+
+    local function restoreToolEnabled(tool)
+        if not isRagebotGun(tool) then return end
+        tool.Enabled = true
+    end
+
+    local function updateAllTools(enabled)
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, item in ipairs(char:GetChildren()) do
+            if isRagebotGun(item) then
+                if enabled then
+                    hookToolDisabled(item)
+                else
+                    restoreToolEnabled(item)
+                end
+            end
+        end
+    end
+
+    local function hookCharacterTools(char)
+        if not char then return end
+        for _, item in ipairs(char:GetChildren()) do
+            if isRagebotGun(item) then
+                if Toggles.EnableAutoKill and Toggles.EnableAutoKill.Value then
+                    hookToolDisabled(item)
+                else
+                    restoreToolEnabled(item)
+                end
+            end
+        end
+        char.ChildAdded:Connect(function(child)
+            if isRagebotGun(child) then
+                if Toggles.EnableAutoKill and Toggles.EnableAutoKill.Value then
+                    hookToolDisabled(child)
+                else
+                    restoreToolEnabled(child)
+                end
+            end
+        end)
+    end
+
+    if LocalPlayer.Character then
+        hookCharacterTools(LocalPlayer.Character)
+    end
+
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        task.wait(0.1)
+        hookCharacterTools(char)
+        if Toggles.EnableAutoKill and Toggles.EnableAutoKill.Value then
+            updateAllTools(true)
+        end
+    end)
+
+    RunService.Heartbeat:Connect(function()
+        if not (Toggles.EnableAutoKill and Toggles.EnableAutoKill.Value) then return end
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, item in ipairs(char:GetChildren()) do
+            if isRagebotGun(item) and item.Enabled then
+                item.Enabled = false
+            end
+        end
+    end)
+
+    local function togglePhysicsRep(state)
+        if not sethiddenproperty then return end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            pcall(function()
+                if state then
+                    sethiddenproperty(hrp, "PhysicsRepRootPart", nil)
+                else
+                    sethiddenproperty(hrp, "PhysicsRepRootPart", hrp)
+                end
+            end)
+        end
+    end
+
+    local function resetCamera()
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            Camera.CameraSubject = hum
+        end
+    end
+
+    local function isLocalPlayerReloading()
+        local char = LocalPlayer.Character
+        if not char then return false end
+
+        local bodyEffects = char:FindFirstChild("BodyEffects")
+        if bodyEffects and bodyEffects:FindFirstChild("Reload") and bodyEffects.Reload.Value == true then
+            return true
+        end
+
+        for _, tool in ipairs(char:GetChildren()) do
+            if isRagebotGun(tool) and tool:FindFirstChild("Ammo") then
+                if tool.Ammo.Value <= 0 then
+                    return true
+                end
+            end
+        end
+
+        return false
+    end
+
+    local function isValidTarget(plr)
+        if not plr or plr == LocalPlayer or not plr.Character then return false end
+        local char = plr.Character
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return false end
+
+        if Toggles.AutoKillKOCheck and Toggles.AutoKillKOCheck.Value then
+            local bodyEffects = char:FindFirstChild("BodyEffects")
+            local isKO = bodyEffects and bodyEffects:FindFirstChild("K.O") and bodyEffects["K.O"].Value == true
+            if isKO or hum.PlatformStand then
+                return false
+            end
+        end
+
+        if Toggles.AutoKillFFCheck and Toggles.AutoKillFFCheck.Value then
+            if char:FindFirstChildOfClass("ForceField") then
+                return false
+            end
+        end
+
+        local chosenPart = Options.AutoKillHitpart and Options.AutoKillHitpart.Value or "Head"
+        local targetPart = char:FindFirstChild(chosenPart) or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+        if not targetPart then return false end
+
+        return true, targetPart
+    end
+
+    local function getAngleToCam(worldPos)
+        local camCF = Camera.CFrame
+        local dirToTarget = (worldPos - camCF.Position).Unit
+        local dot = camCF.LookVector:Dot(dirToTarget)
+        dot = math.clamp(dot, -1, 1)
+        return math.deg(math.acos(dot))
+    end
+
+    local function getClosestRagebotTarget()
+        local bestAngle = math.huge
+        local bestPlr = nil
+
+        for _, plr in ipairs(Players:GetPlayers()) do
+            local valid, targetPart = isValidTarget(plr)
+            if valid and targetPart then
+                local angle = getAngleToCam(targetPart.Position)
+                if angle < bestAngle and angle < 60 then
+                    bestAngle = angle
+                    bestPlr = plr
+                end
+            end
+        end
+
+        return bestPlr, bestAngle
+    end
+
+    local function getTargetAngleToCam(plr)
+        local valid, targetPart = isValidTarget(plr)
+        if not valid or not targetPart then return math.huge end
+        return getAngleToCam(targetPart.Position)
+    end
+
+    local function shootRagebotTarget(targetPlr)
+        if not targetPlr or not targetPlr.Character then return end
+        local chosenPart = Options.AutoKillHitpart and Options.AutoKillHitpart.Value or "Head"
+        local targetPart = targetPlr.Character:FindFirstChild(chosenPart) or targetPlr.Character:FindFirstChild("Head")
+        if not targetPart then return end
+
+        local char = LocalPlayer.Character
+        if not char then return end
+
+        local mainEvent = ReplicatedStorage:FindFirstChild("MainEvent")
+        if not mainEvent then return end
+
+        for _, tool in ipairs(char:GetChildren()) do
+            if tool:IsA("Tool") and tool:FindFirstChild("Handle") and tool:FindFirstChild("Ammo") then
+                mainEvent:FireServer(
+                    "ShootGun",
+                    tool.Handle,
+                    tool.Handle.CFrame.Position,
+                    targetPart.Position,
+                    targetPart,
+                    Vector3.new(0, 0, -1)
+                )
+            end
+        end
+    end
+
+    local function stopAutoKill()
+        if not rbHoldState.active then return end
+        rbHoldState.active = false
+        rbHoldState.targetCFrame = nil
+        rbHoldState.targetPlayer = nil
+        rbHoldState.isReloadingSafe = false
+        togglePhysicsRep(false)
+        resetCamera()
+    end
+
+    local function startAutoKill()
+        if rbHoldState.active then return end
+        local target = getClosestRagebotTarget()
+        rbHoldState.targetPlayer = target
+
+        if not target or not target.Character then
+            return
+        end
+
+        rbHoldState.active = true
+        rbHoldState.isReloadingSafe = false
+        togglePhysicsRep(true)
+        Camera.CameraSubject = dynamicAnchor
+    end
+
+    local AutoKillGroup = Tabs.main:AddLeftGroupbox('AutoKill (M1)')
+
+    AutoKillGroup:AddToggle('EnableAutoKill', {
+        Text = 'Enable AutoKill (M1)',
+        Default = false,
+    }):AddKeyPicker('AutoKillKey', {
+        Default = 'None',
+        SyncToggleState = true,
+        Mode = 'Toggle',
+        Text = 'AutoKill Toggle Key',
+        NoUI = false,
+    })
+
+    AutoKillGroup:AddToggle('AutoKillKOCheck', {
+        Text = 'K.O Check',
+        Default = true,
+    })
+
+    AutoKillGroup:AddToggle('AutoKillFFCheck', {
+        Text = 'ForceField Check',
+        Default = true,
+    })
+
+    AutoKillGroup:AddDropdown('AutoKillHitpart', {
+        Values = {'Head', 'UpperTorso', 'HumanoidRootPart'},
+        Default = 1,
+        Multi = false,
+        Text = 'Target Hitpart',
+    })
+
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe or UserInputService:GetFocusedTextBox() then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 and Toggles.EnableAutoKill and Toggles.EnableAutoKill.Value then
+            startAutoKill()
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 and rbHoldState.active then
+            stopAutoKill()
+        end
+    end)
+
+    Toggles.EnableAutoKill:OnChanged(function()
+        local enabled = Toggles.EnableAutoKill.Value
+        updateAllTools(enabled)
+        if not enabled then
+            stopAutoKill()
+        end
+    end)
+
+    RunService.Heartbeat:Connect(function()
+        if not rbHoldState.active then return end
+
+        if isLocalPlayerReloading() then
+            if not rbHoldState.isReloadingSafe then
+                rbHoldState.isReloadingSafe = true
+                togglePhysicsRep(false)
+                resetCamera()
+            end
+
+            local char = LocalPlayer.Character
+            if char then
+                for _, tool in ipairs(char:GetChildren()) do
+                    if isRagebotGun(tool) and tool:FindFirstChild("Ammo") and tool.Ammo.Value <= 0 then
+                        pcall(function()
+                            ReplicatedStorage.MainEvent:FireServer("Reload", tool)
+                        end)
+                    end
+                end
+            end
+
+            return
+        else
+            if rbHoldState.isReloadingSafe then
+                rbHoldState.isReloadingSafe = false
+                togglePhysicsRep(true)
+                Camera.CameraSubject = dynamicAnchor
+            end
+        end
+
+        local targetPlayer = rbHoldState.targetPlayer
+
+        local targetAlive = false
+        local targetIsKO = false
+        if targetPlayer and targetPlayer.Character then
+            local hum = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                local bodyEff = targetPlayer.Character:FindFirstChild("BodyEffects")
+                targetIsKO = bodyEff and bodyEff:FindFirstChild("K.O") and bodyEff["K.O"].Value == true
+                targetAlive = true
+            end
+        end
+
+        local koCheckActive = Toggles.AutoKillKOCheck and Toggles.AutoKillKOCheck.Value
+        if not targetAlive or (koCheckActive and targetIsKO) then
+            stopAutoKill()
+            return
+        end
+
+        local bestPlr, bestAngle = getClosestRagebotTarget()
+        local currentAngle = getTargetAngleToCam(targetPlayer)
+        if bestPlr and bestPlr ~= targetPlayer then
+            if currentAngle == math.huge or (currentAngle - bestAngle) >= 35 then
+                rbHoldState.targetPlayer = bestPlr
+                targetPlayer = bestPlr
+            end
+        end
+
+        local activePlr = rbHoldState.targetPlayer
+        local valid, enemyPart = isValidTarget(activePlr)
+
+        if not valid or not enemyPart then
+            local fallbackBest = getClosestRagebotTarget()
+            if fallbackBest and fallbackBest ~= activePlr then
+                rbHoldState.targetPlayer = fallbackBest
+                valid, enemyPart = isValidTarget(fallbackBest)
+                if not valid or not enemyPart then
+                    stopAutoKill()
+                    return
+                end
+            else
+                stopAutoKill()
+                return
+            end
+        end
+
+        rbHoldState.targetCFrame = CFrame.new(enemyPart.Position + Vector3.new(0, offsetHeight, 0))
+
+        local myChar = LocalPlayer.Character
+        local myHead = myChar and myChar:FindFirstChild("Head")
+        if not myHead then return end
+
+        local savedCFrame = myHead.CFrame
+        myHead.CFrame = rbHoldState.targetCFrame
+        dynamicAnchor.CFrame = savedCFrame
+
+        local now = tick()
+        if now - rbHoldState.lastFire >= fireCooldown then
+            rbHoldState.lastFire = now
+            shootRagebotTarget(rbHoldState.targetPlayer)
+        end
+
+        pcall(function()
+            RunService.RenderStepped:Wait()
+            if myHead and myHead.Parent then
+                myHead.CFrame = savedCFrame
+            end
+        end)
+    end)
+end
+
 local SilentGroup = Tabs.main:AddRightGroupbox("Silent Aim")
 SilentGroup:AddToggle("EnableSilent",  {Text="Enable Silent Aim", Default=false}):AddKeyPicker("EnableSilentKey", {Default="None", SyncToggleState=true, Mode="Toggle", Text="Silent Aim Key", NoUI=false})
 SilentGroup:AddToggle("SilentTracer",  {Text="Tracer",            Default=false})
@@ -1475,8 +1902,8 @@ local desync4 = {
     old_position = nil
 }
 
-if hookmetamethod and not getgenv().kxsyncHooked then
-    getgenv().kxsyncHooked = true
+if hookmetamethod and not getgenv().moonstandHooked then
+    getgenv().moonstandHooked = true
     local oldIndex
     oldIndex = hookmetamethod(game, "__index", function(self, key)
         if not checkcaller() and key == "CFrame" then
@@ -2354,6 +2781,126 @@ if LocalPlayer.Character then
     task.spawn(setupAutoReloadForChar, LocalPlayer.Character)
 end
 LocalPlayer.CharacterAdded:Connect(setupAutoReloadForChar)
+
+GunModsGroup:AddDivider()
+
+local multiGunEnabled = false
+local multiGunShooting = false
+local multiGunSelectedGuns = {}
+
+local function multiGunNorm(name)
+    if not name then return "" end
+    return tostring(name):lower():gsub("[%[%]%s%-_]", "")
+end
+
+local multiGunWeaponValues = {
+    "ak47",
+    "ar",
+    "aug",
+    "deagle",
+    "double-barrel SG",
+    "Drum-shotgun",
+    "DrumGun",
+    "Flamethrower",
+    "flintlock",
+    "glock",
+    "lmg",
+    "p90",
+    "revolver",
+    "rifle",
+    "smg",
+    "shotgun",
+    "silencer",
+    "silencerar",
+    "tactical shotgun",
+    "tacticalshotgun"
+}
+
+GunModsGroup:AddToggle('EnableMultiGun', {
+    Text = 'Multi Gun',
+    Default = false,
+    Callback = function(v)
+        multiGunEnabled = v
+        if not v then
+            local char = LocalPlayer.Character
+            if char then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then pcall(function() hum:UnequipTools() end) end
+            end
+        end
+    end
+})
+
+local multiGunDepBox = GunModsGroup:AddDependencyBox()
+multiGunDepBox:AddDropdown('MultiGunSelector', {
+    Values = multiGunWeaponValues,
+    Default = {'rifle'},
+    Multi = true,
+    Text = 'Select Guns'
+})
+multiGunDepBox:SetupDependencies({{Toggles.EnableMultiGun, true}})
+
+Options.MultiGunSelector:OnChanged(function()
+    multiGunSelectedGuns = {}
+    local val = Options.MultiGunSelector.Value
+    if type(val) == "table" then
+        for k, v in pairs(val) do
+            if v == true and type(k) == "string" then
+                multiGunSelectedGuns[multiGunNorm(k)] = true
+            elseif type(v) == "string" then
+                multiGunSelectedGuns[multiGunNorm(v)] = true
+            end
+        end
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 and multiGunEnabled then
+        multiGunShooting = true
+    end
+    if input.KeyCode == Enum.KeyCode.R and multiGunEnabled then
+        local char = LocalPlayer.Character
+        if char then
+            for _, tool in pairs(char:GetChildren()) do
+                if tool:IsA("Tool") and tool:FindFirstChild("Ammo") and multiGunSelectedGuns[multiGunNorm(tool.Name)] then
+                    pcall(function() ReplicatedStorage.MainEvent:FireServer("Reload", tool) end)
+                end
+            end
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        multiGunShooting = false
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if multiGunEnabled then
+            local char = LocalPlayer.Character
+            local backpack = LocalPlayer:FindFirstChild("Backpack")
+            if char and backpack then
+                for _, tool in ipairs(backpack:GetChildren()) do
+                    if tool:IsA("Tool") and multiGunSelectedGuns[multiGunNorm(tool.Name)] then
+                        pcall(function() tool.Parent = char end)
+                    end
+                end
+                if multiGunShooting then
+                    for _, tool in pairs(char:GetChildren()) do
+                        if tool:IsA("Tool") and multiGunSelectedGuns[multiGunNorm(tool.Name)] then
+                            pcall(function() tool:Activate() end)
+                        end
+                    end
+                end
+            end
+        end
+        task.wait()
+    end
+end)
+
 
 local AutoLoadoutGroup = Tabs.main:AddRightGroupbox('Auto Loadout')
 
@@ -3992,6 +4539,133 @@ do
 
         task.delay(DUR, function()
             if item and not item.removing then fadeOut(item) end
+        end)
+    end
+end
+
+local showKillDeathNotify
+do
+    local kdGui, kdContainer, kdActive = nil, nil, {}
+    local KD_W, KD_H, KD_GAP, KD_DUR, KD_FADE = 260, 30, 4, 3, 0.25
+    local KD_MAX = 6
+
+    local function createKDGui()
+        if kdGui and kdGui.Parent then return end
+        kdGui = Instance.new("ScreenGui")
+        kdGui.Name = "KraviXKillDeathGui"
+        kdGui.ResetOnSpawn = false
+        kdGui.IgnoreGuiInset = true
+        kdGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        pcall(function() kdGui.Parent = game:GetService("CoreGui") end)
+        if not kdGui.Parent then kdGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+        kdContainer = Instance.new("Frame")
+        kdContainer.Name = "KDContainer"
+        kdContainer.Parent = kdGui
+        kdContainer.BackgroundTransparency = 1
+        kdContainer.BorderSizePixel = 0
+        kdContainer.Size = UDim2.new(0, KD_W, 0, 220)
+        kdContainer.AnchorPoint = Vector2.new(0.5, 1)
+        kdContainer.Position = UDim2.new(0.5, 0, 0.68, 0)
+    end
+
+    local function kdUpdatePositions(animated)
+        for i, n in ipairs(kdActive) do
+            if n.frame and n.frame.Parent then
+                local targetY = -(i * KD_H) - ((i - 1) * KD_GAP)
+                n.currentY = targetY
+                local targetPos = UDim2.new(0, 0, 1, targetY)
+                if animated then
+                    TweenService:Create(n.frame, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = targetPos}):Play()
+                else
+                    n.frame.Position = targetPos
+                end
+            end
+        end
+    end
+
+    local function kdFadeOut(n)
+        if not n or n.removing then return end
+        n.removing = true
+        local frame, label = n.frame, n.label
+        if frame and frame.Parent then
+            TweenService:Create(frame, TweenInfo.new(KD_FADE, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {Position = UDim2.new(0, 40, 1, n.currentY), BackgroundTransparency = 1}):Play()
+            TweenService:Create(label, TweenInfo.new(KD_FADE, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {TextTransparency = 1}):Play()
+            task.delay(KD_FADE + 0.05, function()
+                if frame and frame.Parent then frame:Destroy() end
+            end)
+        end
+        for i, x in ipairs(kdActive) do
+            if x == n then table.remove(kdActive, i); break end
+        end
+        kdUpdatePositions(true)
+    end
+
+    showKillDeathNotify = function(eventType, playerName, kills, deaths)
+        createKDGui()
+        while #kdActive >= KD_MAX do
+            local old = kdActive[1]
+            if old then kdFadeOut(old) else break end
+        end
+
+        local isKill = eventType == 'kill'
+        local bgColor = isKill and Color3.fromRGB(22, 18, 40) or Color3.fromRGB(40, 16, 16)
+        local accentColor = isKill and "#A855F7" or "#F87171"
+        local label1 = isKill and "KILL" or "DEATH"
+
+        local frame = Instance.new("Frame")
+        frame.Name = "KDCard"
+        frame.Parent = kdContainer
+        frame.Size = UDim2.new(1, 0, 0, KD_H)
+        frame.Position = UDim2.new(0, -20, 1, -KD_H)
+        frame.BackgroundColor3 = bgColor
+        frame.BackgroundTransparency = 1
+        frame.BorderSizePixel = 0
+
+        local corner = Instance.new("UICorner", frame)
+        corner.CornerRadius = UDim.new(1, 0)
+
+        local accent = Instance.new("Frame", frame)
+        accent.Name = "Accent"
+        accent.Size = UDim2.new(0, 3, 0.7, 0)
+        accent.Position = UDim2.new(0, 6, 0.15, 0)
+        accent.BackgroundColor3 = isKill and Color3.fromRGB(168, 85, 247) or Color3.fromRGB(248, 113, 113)
+        accent.BackgroundTransparency = 1
+        accent.BorderSizePixel = 0
+        Instance.new("UICorner", accent).CornerRadius = UDim.new(1, 0)
+
+        local label = Instance.new("TextLabel")
+        label.Parent = frame
+        label.Size = UDim2.new(1, -20, 1, 0)
+        label.Position = UDim2.new(0, 14, 0, 0)
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 13
+        label.TextColor3 = Color3.fromRGB(255, 255, 255)
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.TextYAlignment = Enum.TextYAlignment.Center
+        label.RichText = true
+        label.TextTransparency = 1
+
+        local textStr
+        if isKill and playerName then
+            textStr = string.format('<font color="%s">%s</font>  <b><font color="#FFFFFF">%s</font></b>  <font color="#94A3B8">[%d/%d]</font>', accentColor, label1, tostring(playerName), kills or 0, deaths or 0)
+        else
+            textStr = string.format('<font color="%s">%s</font>  <font color="#94A3B8">[%d/%d]</font>', accentColor, label1, kills or 0, deaths or 0)
+        end
+        label.Text = textStr
+
+        local item = { frame = frame, label = label, currentY = -KD_H, removing = false }
+        table.insert(kdActive, item)
+        kdUpdatePositions(false)
+
+        local finalPos = UDim2.new(0, 0, 1, item.currentY)
+        TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = finalPos, BackgroundTransparency = 0.15}):Play()
+        TweenService:Create(accent, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {BackgroundTransparency = 0}):Play()
+        TweenService:Create(label, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {TextTransparency = 0}):Play()
+
+        task.delay(KD_DUR, function()
+            if item and not item.removing then kdFadeOut(item) end
         end)
     end
 end
@@ -7429,7 +8103,10 @@ updateTeleportPlayerList()
 
 teleGroup:AddButton({Text='Teleport to Player', Func=function()
     local selected = Options.PlayerSelect and Options.PlayerSelect.Value
-    if not selected or selected == "" then
+    if type(selected) == "table" then
+        selected = selected[1] or next(selected)
+    end
+    if not selected or type(selected) ~= "string" or selected == "" then
         Library:Notify('Select a player first!', 2)
         return
     end
@@ -7443,6 +8120,54 @@ teleGroup:AddButton({Text='Teleport to Player', Func=function()
     end
 end})
 
+teleGroup:AddButton({
+    Text = 'TP to Looked Player',
+    Func = function()
+        local myChar = LocalPlayer.Character
+        local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myHrp then return end
+
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local camPos = cam.CFrame.Position
+        local camLook = cam.CFrame.LookVector
+
+        local bestPlayer = nil
+        local bestDot = 0.5
+
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Character then
+                local tPart = p.Character:FindFirstChild("HumanoidRootPart") or p.Character:FindFirstChild("Head") or p.Character:FindFirstChild("UpperTorso")
+                local hum = p.Character:FindFirstChildOfClass("Humanoid")
+                if tPart and hum and hum.Health > 0 then
+                    local dir = (tPart.Position - camPos).Unit
+                    local dot = camLook:Dot(dir)
+                    if dot > bestDot then
+                        bestDot = dot
+                        bestPlayer = p
+                    end
+                end
+            end
+        end
+
+        if bestPlayer and bestPlayer.Character and bestPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            myHrp.CFrame = bestPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 2)
+            pcall(function()
+                myHrp.AssemblyLinearVelocity = Vector3.zero
+                myHrp.Velocity = Vector3.zero
+            end)
+            Library:Notify('Teleported to: ' .. (bestPlayer.DisplayName or bestPlayer.Name), 2)
+        else
+            Library:Notify('No player in camera view!', 2)
+        end
+    end
+}):AddKeyPicker('TpLookedPlayerKeybind', {
+    Default = '',
+    Text = 'TP to Looked Player Key',
+    Mode = 'Press',
+    SyncToggleState = false
+})
+
 teleGroup:AddToggle('ViewTargetPlayer', {Text='View Player', Default=false,
     Callback=function(en)
         if not en then
@@ -7455,7 +8180,10 @@ teleGroup:AddToggle('ViewTargetPlayer', {Text='View Player', Default=false,
 RunService.Heartbeat:Connect(function()
     if not (Toggles.ViewTargetPlayer and Toggles.ViewTargetPlayer.Value) then return end
     local selected = Options.PlayerSelect and Options.PlayerSelect.Value
-    if not selected or selected == "" then return end
+    if type(selected) == "table" then
+        selected = selected[1] or next(selected)
+    end
+    if not selected or type(selected) ~= "string" or selected == "" then return end
     local playerName = selected:match("@([^%s%)]+)") or selected
     local tp = Players:FindFirstChild(playerName)
     if tp and tp.Character then
@@ -7485,7 +8213,6 @@ end
 
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.5)
-    reapplyAllAnimations()
 end)
 
 local colorfromrgb = Color3.fromRGB
@@ -8212,523 +8939,246 @@ do
         end
     end
 
-    _G.rb_currentTargetIndex = 1
-    _G.rb_shouldSwitch = false
-    _G.rb_orbitAngle = 0
-    _G.rb_canrun = true
-    _G.rb_isInCombat = false
-    _G.rb_teleporting = false
-    _G.rb_voiding = false
-    _G.rb_lockedTargetUserId = nil
-    _G.rb_lastRandomTpTick = 0
-    _G.rb_randomTpOffset = Vector3.new(0, 3, -6)
-    _G.rb_randomRotAngles = CFrame.Angles(0, 0, 0)
+    local ragebottargets = {}
+    local lockedTarget   = nil
+    local ragebotactive  = false
+    local ragebotenabled = false
+    local selecttargets  = false
+    local flamethrower_hack = false
+    local ragebotstompactive = false
+    local ragebotrandomtpactive  = false
+    local ragebotrandomrotationactive = false
+    local ragebotviewactive = false
+    local ragebotNotificationsEnabled = false
+    local killCount = 0
+    local deathCount = 0
+    local activeKOTargets = {}
 
-    do
-        RB.GroupBox = Tabs.ragebot:AddLeftGroupbox('Ragebot Manual')
+    _G.rb_currentTargetIndex=1 _G.rb_shouldSwitch=false _G.rb_orbitAngle=0
+    _G.rb_smoothedTargetPos=nil _G.rb_canrun=true _G.rb_isInCombat=false
+    _G.rb_originalPosition=nil _G.rb_teleporting=false _G.rb_voiding=false _G.rb_voidBait=false
+    _G.rb_lockedTargetUserId=nil _G.rb_lastKnownTargetPos=nil
 
-        local rbPlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-        local rbStatusGui = rbPlayerGui:FindFirstChild("RagebotStatusGui")
-        if not rbStatusGui then
-            rbStatusGui = Instance.new("ScreenGui")
-            rbStatusGui.Name = "RagebotStatusGui"
-            rbStatusGui.ResetOnSpawn = false
-            rbStatusGui.Parent = rbPlayerGui
+    local RagebotGroupBox      = Tabs.ragebot:AddLeftGroupbox('Ragebot')
+    RagebotGroupBox:AddToggle('ragebotenabled',{Text='Enabled',Default=false,
+        Callback=function(v)
+            ragebotenabled=v
+            if not v then
+                ragebotactive=false lockedTarget=nil
+                workspace.CurrentCamera.CameraSubject=LocalPlayer.Character:FindFirstChild('Humanoid')
+            end
         end
-        local rbStatusLabel = rbStatusGui:FindFirstChild("StatusLabel")
-        if not rbStatusLabel then
-            rbStatusLabel = Instance.new("TextLabel")
-            rbStatusLabel.Name = "StatusLabel"
-            rbStatusLabel.BackgroundTransparency = 1
-            rbStatusLabel.Size = UDim2.new(1, 0, 0, 25)
-            rbStatusLabel.Position = UDim2.new(0, 0, 0.45, 0)
-            rbStatusLabel.AnchorPoint = Vector2.new(0, 0.5)
-            rbStatusLabel.Font = 2
-            rbStatusLabel.TextSize = 14
-            rbStatusLabel.TextXAlignment = Enum.TextXAlignment.Center
-            rbStatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-            rbStatusLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-            rbStatusLabel.TextStrokeTransparency = 0
-            rbStatusLabel.Text = ""
-            rbStatusLabel.Parent = rbStatusGui
+    }):AddKeyPicker('ragebotkeybind',{Default='',Text='ragebot',Mode='Toggle',
+        Callback=function(v)
+            if not ragebotenabled or UserInputService:GetFocusedTextBox() then return end
+            ragebotactive=v
+            if not v then lockedTarget=nil workspace.CurrentCamera.CameraSubject=LocalPlayer.Character:FindFirstChild('Humanoid') end
         end
-        RB.setStatus = function(txt)
-            pcall(function() rbStatusLabel.Text = RB.active and (txt or "") or "" end)
+    })
+    RagebotGroupBox:AddToggle('selecttargets',{Text='Select Targets',Default=false,Callback=function(v) selecttargets=v end})
+    local ragebottargetsdepbox = RagebotGroupBox:AddDependencyBox()
+    ragebottargetsdepbox:AddDropdown('ragebottargets',{Text='Targets',Default={},Multi=true,
+        Values=(function()
+            local names={}
+            for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then table.insert(names, p.DisplayName .. " (@" .. p.Name .. ")") end end
+            return names
+        end)()
+    })
+    Options.ragebottargets:OnChanged(function()
+        ragebottargets={}
+        for name, sel in pairs(Options.ragebottargets.Value) do
+            if sel then
+                local realName = tostring(name):match("@([^%s%)]+)") or name
+                local p = Players:FindFirstChild(realName)
+                if p then table.insert(ragebottargets, p) end
+            end
         end
-
-        RB.sendChat = function(msg)
-            if not msg or msg == "" then return end
-            pcall(function()
-                local chatEvents = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
-                if chatEvents and chatEvents:FindFirstChild("SayMessageRequest") then
-                    chatEvents.SayMessageRequest:FireServer(msg, "All")
-                end
-            end)
-            pcall(function()
-                local tcs = game:GetService("TextChatService")
-                if tcs and tcs.ChatVersion == Enum.ChatVersion.TextChatService then
-                    local gen = tcs:FindFirstChild("TextChannels", true) and tcs.TextChannels:FindFirstChild("RBXGeneral")
-                    if gen then gen:SendAsync(msg) end
-                end
-            end)
-        end
-
-        RB.trashPhrases = {
-            "KraviX ON TOP!",
-            "KRAVIX NEVER LOSES",
-            "FREE KILL",
-            "KRAVIX TAKES OVER",
-            "KRAVIX OWNS",
-            "GAME OVER BABY"
-        }
-        RB.killedTargets = {}
-        RB.trashSent = {}
-
-        RB.voidSelf = function(root)
-            if not root then return end
-            pcall(function()
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-                root.CFrame = CFrame.new(
-                    math.random(-500000, 500000),
-                    math.random(0, 500000),
-                    math.random(-500000, 500000)
-                )
-            end)
-        end
-
-        RB.reloadTool = function()
-            pcall(function()
-                local char = LocalPlayer.Character
-                if char then
-                    for _, tool in ipairs(char:GetChildren()) do
-                        if tool:IsA('Tool') and tool:FindFirstChild('Ammo') then
-                            ReplicatedStorage.MainEvent:FireServer('Reload', tool)
-                        end
-                    end
-                end
-            end)
-        end
-
-        RB.GroupBox:AddToggle('ragebotenabled', { Text = 'Enabled', Default = false })
-            :AddKeyPicker('ragebotkeybind', { Default = '', Text = 'ragebot', Mode = 'Toggle', SyncToggleState = true, NoUI = false })
-        RB.GroupBox:AddToggle('TargetHUD', { Text = 'Target HUD', Default = false })
-
-        Toggles.ragebotenabled:OnChanged(function()
-            local enabled = Toggles.ragebotenabled.Value
-            RB.enabled = enabled
-            RB.active = enabled
-
-            local char = LocalPlayer.Character
-            local root = char and char:FindFirstChild('HumanoidRootPart')
-
-            if enabled then
-                if root then
-                    RB.savedCFrame = root.CFrame
-                end
-            else
-                if root and RB.savedCFrame then
-                    pcall(function()
-                        root.Velocity = Vector3.zero
-                        root.RotVelocity = Vector3.zero
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        root.AssemblyAngularVelocity = Vector3.zero
-                        root.CFrame = RB.savedCFrame
-                    end)
-                end
-                RB.savedCFrame = nil
-                RB.lockedTarget = nil
-                _G.rb_teleporting = false
-                _G.rb_voiding = false
-                _G.rb_isInCombat = false
-                RB.setStatus("")
-                if char and char:FindFirstChild('Humanoid') then
-                    workspace.CurrentCamera.CameraSubject = char.Humanoid
+        if lockedTarget then
+            local stillSelected = false
+            for name, sel in pairs(Options.ragebottargets.Value) do
+                if sel then
+                    local realName = tostring(name):match("@([^%s%)]+)") or name
+                    if realName == lockedTarget.Name then stillSelected = true break end
                 end
             end
-        end)
-    end
-
-    do
-        RB.GroupBox:AddToggle('selecttargets',{
-            Text='Select Targets',
-            Default=false,
-            Callback=function(v)
-                RB.selecttargets = v
-                RB.lockedTarget = nil
-                _G.rb_lockedTargetUserId = nil
-                _G.rb_shouldSwitch = true
-            end
-        })
-        RB.targetsDepBox = RB.GroupBox:AddDependencyBox()
-
-        RB.TargetDropdown = RB.targetsDepBox:AddDropdown('ragebottargets', {
-            Values = {},
-            Default = {},
-            Multi = true,
-            Text = 'Targets',
-            Tooltip = 'Select players to target with ragebot',
-            Callback = function() end
-        })
-
-        Options.ragebottargets:OnChanged(function()
-            RB.targets = {}
-            local val = Options.ragebottargets.Value
-            if type(val) == "table" then
-                for k, v in pairs(val) do
-                    local entry = nil
-                    if type(k) == "number" and type(v) == "string" then
-                        entry = v
-                    elseif type(k) == "string" and v == true then
-                        entry = k
-                    end
-                    if entry then
-                        local cleanName = entry:match("@([^%s%)]+)") or entry
-                        local p = Players:FindFirstChild(cleanName)
-                        if p then table.insert(RB.targets, p) end
-                    end
-                end
-            end
-            RB.lockedTarget = nil
-            _G.rb_lockedTargetUserId = nil
-            _G.rb_currentTargetIndex = 0
-            _G.rb_shouldSwitch = true
-        end)
-
-        RB.updatePlayerList = function()
-            local values = {}
+            if not stillSelected then lockedTarget = nil end
+        end
+    end)
+    ragebottargetsdepbox:SetupDependencies({{Toggles.selecttargets,true}})
+    RagebotGroupBox:AddLabel('Select Target Keybind'):AddKeyPicker('ragebottargetkey',{Default='',Text='Select Target',
+        Callback=function()
+            if UserInputService:GetFocusedTextBox() then return end
+            local mouse = UserInputService:GetMouseLocation()
+            local closest, closestPlr = math.huge, nil
             for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer then
-                    table.insert(values, player.DisplayName .. ' (@' .. player.Name .. ')')
-                end
-            end
-            table.sort(values)
-            if RB.TargetDropdown and RB.TargetDropdown.SetValues then
-                RB.TargetDropdown:SetValues(values)
-            end
-        end
-
-        Players.PlayerAdded:Connect(function()
-            task.delay(0.5, RB.updatePlayerList)
-        end)
-        Players.PlayerRemoving:Connect(function()
-            task.delay(0.5, RB.updatePlayerList)
-        end)
-        RB.updatePlayerList()
-
-        RB.targetsDepBox:SetupDependencies({{Toggles.selecttargets,true}})
-
-        RB.GroupBox:AddLabel('Select Target Keybind'):AddKeyPicker('ragebottargetkey',{Default='',Text='Select Target',
-            Callback=function()
-                if UserInputService:GetFocusedTextBox() then return end
-                local closestPlr = getClosestPlayerToCameraOrMouse()
-                if not closestPlr then
-                    Library:Notify("No player found near camera/mouse!", 2)
-                    return
-                end
-                if Toggles.selecttargets and not Toggles.selecttargets.Value then
-                    Toggles.selecttargets:SetValue(true)
-                end
-                local cur = Options.ragebottargets and Options.ragebottargets.Value or {}
-                local new = {}
-                if type(cur) == "table" then
-                    for k, v in pairs(cur) do
-                        if type(k) == "string" then
-                            new[k] = v
-                        elseif type(k) == "number" and type(v) == "string" then
-                            new[v] = true
+                if player~=LocalPlayer and player.Character then
+                    local hrp = player.Character:FindFirstChild('HumanoidRootPart')
+                    local hum = player.Character:FindFirstChild('Humanoid')
+                    if hrp and hum and hum.Health>0 then
+                        local sp, on = workspace.CurrentCamera:WorldToViewportPoint(hrp.Position)
+                        if on then
+                            local d = (Vector2.new(sp.X,sp.Y)-mouse).Magnitude
+                            if d<closest then closest=d closestPlr=player end
                         end
                     end
                 end
-                local key = closestPlr.DisplayName .. ' (@' .. closestPlr.Name .. ')'
-                if new[key] then
-                    new[key] = nil
-                    RB.lockedTarget = nil
-                    _G.rb_lockedTargetUserId = nil
-                    _G.rb_shouldSwitch = true
-                    Library:Notify("Ragebot Target Removed: " .. closestPlr.DisplayName, 2)
-                else
-                    new[key] = true
-                    RB.lockedTarget = closestPlr
-                    _G.rb_lockedTargetUserId = closestPlr.UserId
-                    _G.rb_shouldSwitch = false
-                    Library:Notify("Ragebot Target Selected: " .. closestPlr.DisplayName, 2)
-                end
-                if Options.ragebottargets and Options.ragebottargets.SetValue then
-                    Options.ragebottargets:SetValue(new)
-                end
             end
-        })
-    end
+            if not closestPlr then return end
+            local cur = Options.ragebottargets.Value or {}
+            local new = {}
+            for k,v in pairs(cur) do new[k]=v end
+            local keyWithAt = closestPlr.DisplayName .. " (@" .. closestPlr.Name .. ")"
+            if new[keyWithAt] or new[closestPlr.Name] then
+                new[keyWithAt] = nil
+                new[closestPlr.Name] = nil
+            else
+                new[keyWithAt] = true
+            end
+            Options.ragebottargets:SetValue(new)
+        end
+    })
+    RagebotGroupBox:AddToggle('useflame',{Text='Use Flamethrower',Default=false,Callback=function(v) flamethrower_hack=v end})
+    RagebotGroupBox:AddDropdown('settingsdropdown',{Text='Settings',Values={'Stomp','Random TP','Random Rotation','View'},Default=0,Multi=true})
+    Options.settingsdropdown:OnChanged(function()
+        local s = Options.settingsdropdown.Value
+        ragebotstompactive=s['Stomp'] ragebotrandomtpactive=s['Random TP']
+        ragebotrandomrotationactive=s['Random Rotation'] ragebotviewactive=s['View']
+        if not ragebotviewactive then workspace.CurrentCamera.CameraSubject=LocalPlayer.Character:FindFirstChild('Humanoid') end
+    end)
+    RagebotGroupBox:AddToggle('ragebotnotifications',{Text='Kill/Death Notifications',Default=false,
+        Callback=function(v) ragebotNotificationsEnabled=v if not v then killCount=0 deathCount=0 table.clear(activeKOTargets) end end
+    })
+    RagebotGroupBox:AddToggle('TargetHUD', {Text='Target HUD', Default=false})
 
+    RagebotGroupBox:AddDivider()
+    RagebotGroupBox:AddToggle('RbAutoBuyWeapon', { Text = 'Auto Buy Weapon', Default = false,
+        Callback = function(v) RB.autoBuyWeapon = v end })
+    RagebotGroupBox:AddDropdown('RbAutoBuyWeaponSelect', {
+        Values = {
+            'AK47',
+            'AR',
+            'AUG',
+            'Deagle',
+            'Double-Barrel SG',
+            'DrumGun',
+            'Flamethrower',
+            'Flintlock',
+            'Glock',
+            'Grenade',
+            'LMG',
+            'P90',
+            'Revolver',
+            'Rifle',
+            'RPG',
+            'Shotgun',
+            'Silencer',
+            'SilencerAR',
+            'SMG',
+            'Tactical Shotgun'
+        },
+        Default = 1, Multi = true, Text = 'Weapons to Buy'
+    })
+    RagebotGroupBox:AddToggle('RbAutoBuyAmmo', { Text = 'Auto Buy Ammo', Default = false,
+        Callback = function(v) RB.autoBuyAmmo = v end })
     do
-        RB.GroupBox:AddToggle('useflame',{Text='Use Flamethrower',Default=false,Callback=function(v) RB.flamethrower_hack=v end})
-        RB.GroupBox:AddDropdown('rbPositionMode', {
-            Text = 'Position Mode',
-            Values = {'Default', 'Above Target', 'Above Upside Down Spin', 'Under Target'},
-            Default = 1,
-            Callback = function(mode)
-                RB.targetPositionMode = mode
-            end
-        })
-        RB.GroupBox:AddDropdown('settingsdropdown',{
-            Text='Settings',
-            Values={'Stomp','View'},
-            Default=0,
-            Multi=true,
-            Callback=function(s)
-                local stomp, view = false, false
-                if type(s) == "table" then
-                    for k, v in pairs(s) do
-                        if type(k) == "number" and type(v) == "string" then
-                            if v == 'Stomp' then stomp = true end
-                            if v == 'View' then view = true end
-                        elseif v == true then
-                            if k == 'Stomp' then stomp = true end
-                            if k == 'View' then view = true end
-                        end
-                    end
-                end
-                RB.stompactive = stomp
-                RB.viewactive = view
-                if not RB.viewactive and LocalPlayer.Character then
-                    workspace.CurrentCamera.CameraSubject = LocalPlayer.Character:FindFirstChild('Humanoid')
+        local antiConnections = {}
+        local function stripAnimations(character)
+            if character:GetAttribute('AntiServerLaggerHandled') then return end
+            character:SetAttribute('AntiServerLaggerHandled', true)
+            local hum = character:WaitForChild('Humanoid', 5)
+            if not hum then return end
+            local anim = hum:FindFirstChildOfClass('Animator')
+            if anim then anim:Destroy() end
+            local animate = character:FindFirstChild('Animate')
+            if animate then animate.Disabled = true end
+            for _, v in ipairs(character:GetDescendants()) do
+                if v:IsA("BodyVelocity") or v:IsA("BodyGyro") or v:IsA("BodyPosition") or v:IsA("BodyAngularVelocity") or v:IsA("BodyForce") then
+                    pcall(function() v:Destroy() end)
                 end
             end
-        })
-
-        RB.GroupBox:AddToggle('ragebotnotifications',{Text='Kill/Death Notifications',Default=false,
-            Callback=function(v) RB.notificationsEnabled=v if not v then RB.killCount=0 RB.deathCount=0 RB.lastKilledTarget=nil end end
-        })
-
-        RB.GroupBox:AddToggle("TrashTalkAutoRagebot", {
-            Text = "Auto Trash Talk on Kill",
-            Default = false,
-            Callback = function(v)
-                RB.trashTalkAutoEnabled = v
-                Library:Notify("Auto Trash Talk on Kill: " .. (v and "Enabled" or "Disabled"), 3)
-            end
-        })
-
-        _G.rb_bagging = false
-
-        RB.GroupBox:AddDivider()
-        RB.GroupBox:AddToggle('RbAutoBuyWeapon', { Text = 'Auto Buy Weapon', Default = false,
-            Callback = function(v) RB.autoBuyWeapon = v end })
-        RB.GroupBox:AddDropdown('RbAutoBuyWeaponSelect', {
-            Values = {
-                "AK47",
-                "AR",
-                "AUG",
-                "Deagle",
-                "Double-Barrel SG",
-                "DrumGun",
-                "Flamethrower",
-                "Flintlock",
-                "Glock",
-                "Grenade",
-                "LMG",
-                "P90",
-                "Revolver",
-                "Rifle",
-                "RPG",
-                "Shotgun",
-                "Silencer",
-                "SilencerAR",
-                "SMG",
-                "Tactical Shotgun"
-            },
-            Default = 1, Multi = true, Text = 'Weapons to Buy'
-        })
-        RB.GroupBox:AddToggle('RbAutoBuyAmmo', { Text = 'Auto Buy Ammo', Default = false,
-            Callback = function(v) RB.autoBuyAmmo = v end })
-
-        if getgenv().rb_forceCFrameConn then getgenv().rb_forceCFrameConn:Disconnect() end
-        getgenv().rb_forceCFrameConn = RunService.Heartbeat:Connect(function()
-            if RB.forceCFrame then
-                local c = LocalPlayer.Character
-                local hrp = c and c:FindFirstChild('HumanoidRootPart')
-                if hrp then
-                    hrp.CFrame = RB.forceCFrame
-                    hrp.AssemblyLinearVelocity = Vector3.new(0, 1.85, 0)
+            character.DescendantAdded:Connect(function(desc)
+                if desc:IsA("BodyVelocity") or desc:IsA("BodyGyro") or desc:IsA("BodyPosition") or desc:IsA("BodyAngularVelocity") or desc:IsA("BodyForce") then
+                    task.defer(function() pcall(function() desc:Destroy() end) end)
                 end
-            end
-        end)
-    end
-
-    do
-        RB.getShopItem = function(targetName)
-            local shop = workspace:FindFirstChild('Ignored') and workspace.Ignored:FindFirstChild('Shop')
-            if not shop then return nil, nil end
-            local cleanTarget = string.lower(targetName or ''):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
-            if cleanTarget == "" then return nil, nil end
-
-            local shopAliasTable = {
-                ["bag"] = {"brownbag", "bag", "christmas_sock"},
-                ["brownbag"] = {"brownbag", "bag", "christmas_sock"},
-                ["knife"] = {"knife"},
-                ["combat"] = {"combat", "combatknife"},
-                ["bat"] = {"bat"},
-                ["stopsing"] = {"stopsign", "stopsing"},
-                ["stopsign"] = {"stopsign", "stopsing"},
-                ["sledgehammer"] = {"sledgehammer"},
-                ["doublebarrelsg"] = {"doublebarrelsg", "doublebarrel"},
-                ["doublebarrel"] = {"doublebarrelsg", "doublebarrel"},
-                ["db"] = {"doublebarrelsg", "doublebarrel"},
-                ["shotgun"] = {"shotgun"},
-                ["tacticalshotgun"] = {"tacticalshotgun"},
-            }
-
-            local aliases = shopAliasTable[cleanTarget] or {cleanTarget}
-
-            for _, item in ipairs(shop:GetChildren()) do
-                local rawName = item.Name
-                local bracketName = string.match(rawName, "%b[]")
-                local cleanBracket = bracketName and string.lower(bracketName):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '') or ""
-                for _, alias in ipairs(aliases) do
-                    if cleanBracket == alias then
-                        local head = item:FindFirstChild('Head') or item:FindFirstChildOfClass('BasePart') or item:FindFirstChildWhichIsA('BasePart')
-                        local cd = item:FindFirstChildOfClass('ClickDetector') or item:FindFirstChildWhichIsA('ClickDetector')
-                        if not cd then
-                            for _, v in ipairs(item:GetDescendants()) do
-                                if v:IsA('ClickDetector') then cd = v; break end
-                            end
-                        end
-                        if head and cd then return head, cd end
-                    end
-                end
-            end
-
-            for _, item in ipairs(shop:GetChildren()) do
-                local rawName = item.Name
-                local bracketName = string.match(rawName, "%b[]")
-                local cleanBracket = bracketName and string.lower(bracketName):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '') or ""
-                local cleanItem = string.lower(rawName):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
-                for _, alias in ipairs(aliases) do
-                    if cleanBracket:find(alias, 1, true) or cleanItem:find(alias, 1, true) then
-                        local head = item:FindFirstChild('Head') or item:FindFirstChildOfClass('BasePart') or item:FindFirstChildWhichIsA('BasePart')
-                        local cd = item:FindFirstChildOfClass('ClickDetector') or item:FindFirstChildWhichIsA('ClickDetector')
-                        if not cd then
-                            for _, v in ipairs(item:GetDescendants()) do
-                                if v:IsA('ClickDetector') then cd = v; break end
-                            end
-                        end
-                        if head and cd then return head, cd end
-                    end
-                end
-            end
-
-            return nil, nil
-        end
-
-        RB.findGun = function(parent)
-            if not parent then return nil end
-            for _, t in ipairs(parent:GetChildren()) do
-                if t:IsA('Tool') and t:FindFirstChild('Ammo') then
-                    return t
-                end
-            end
-            return nil
-        end
-
-        RB.getCurrentGunName = function()
-            local char = LocalPlayer.Character
-            local bp   = LocalPlayer.Backpack
-            local gun  = (char and RB.findGun(char)) or (bp and RB.findGun(bp))
-            if not gun then return nil end
-            return gun.Name:lower():gsub('[%[%]]', ''):gsub('%s', '')
-        end
-
-        RB.hasSpecificGun = function(wepName)
-            if not wepName then return false end
-            local clean = string.lower(wepName):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
-            if clean == "" then return false end
-            local function check(parent)
-                if not parent then return false end
-                for _, t in ipairs(parent:GetChildren()) do
-                    if t:IsA('Tool') and t.Name ~= "" then
-                        local cleanTool = string.lower(t.Name):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
-                        if cleanTool == clean or cleanTool:find(clean, 1, true) or (#clean >= 3 and clean:find(cleanTool, 1, true)) then
-                            return true
-                        end
-                    end
-                end
-                return false
-            end
-            local char = LocalPlayer.Character
-            local bp   = LocalPlayer:FindFirstChild("Backpack")
-            return check(char) or check(bp)
-        end
-
-        RB.hasGun = function()
-            local char = LocalPlayer.Character
-            local bp   = LocalPlayer:FindFirstChild("Backpack")
-            return (char and RB.findGun(char)) ~= nil or (bp and RB.findGun(bp)) ~= nil
-        end
-
-        RB.buyGun = function(wepName)
-            if RB.buyingWeapon then return end
-            if RB.hasSpecificGun(wepName) then return end
-            RB.buyingWeapon = true
-            task.spawn(function()
-                pcall(function()
-                    local char = LocalPlayer.Character
-                    local hrp  = char and char:FindFirstChild('HumanoidRootPart')
-                    if not hrp then RB.buyingWeapon = false return end
-                    local origCF = hrp.CFrame
-
-                    local head, cd = RB.getShopItem(wepName)
-                    if not head or not cd then
-                        head, cd = RB.getShopItem(wepName:gsub("%s+", ""):gsub("-", ""))
-                    end
-                    if head and cd then
-                        local shopCF = CFrame.new(head.Position - Vector3.new(0, 5.5, 0))
-                        local attempts = 0
-                        while not RB.hasSpecificGun(wepName) and attempts < 25 do
-                            local c = LocalPlayer.Character
-                            local r = c and c:FindFirstChild('HumanoidRootPart')
-                            local h = c and c:FindFirstChildOfClass('Humanoid')
-                            if not r or not h or h.Health <= 0 then break end
-
-                            RB.forceCFrame = shopCF
-                            r.CFrame = shopCF
-                            r.AssemblyLinearVelocity = Vector3.zero
-                            r.AssemblyAngularVelocity = Vector3.zero
-                            pcall(function() fireclickdetector(cd) end)
-                            pcall(function() fireclickdetector(cd, 0) end)
-                            pcall(function() fireclickdetector(cd, 5) end)
-                            pcall(function() fireclickdetector(cd, 10) end)
-                            pcall(function() fireclickdetector(cd, 0, 'MouseClick') end)
-                            pcall(function() fireclickdetector(cd, 1) end)
-                            task.wait(0.08)
-                            if RB.hasSpecificGun(wepName) then break end
-                            attempts = attempts + 1
-                        end
-                        RB.forceCFrame = nil
-                        local c2 = LocalPlayer.Character
-                        local r2 = c2 and c2:FindFirstChild('HumanoidRootPart')
-                        if r2 then r2.CFrame = origCF end
-                    end
-                end)
-                RB.forceCFrame = nil
-                RB.buyingWeapon = false
             end)
         end
+        local function onRagebotPlayer(player)
+            if player==LocalPlayer then return end
+            if player.Character then stripAnimations(player.Character) end
+            table.insert(antiConnections, player.CharacterAdded:Connect(stripAnimations))
+        end
+        local function EnableAntiServerLagger()
+            for _, p in ipairs(Players:GetPlayers()) do onRagebotPlayer(p) end
+            antiConnections.playerAdded = Players.PlayerAdded:Connect(onRagebotPlayer)
+        end
+        local function DisableAntiServerLagger()
+            for _, c in pairs(antiConnections) do if typeof(c)=='RBXScriptConnection' then c:Disconnect() end end
+            table.clear(antiConnections)
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p.Character then p.Character:SetAttribute('AntiServerLaggerHandled',nil) end
+            end
+        end
+        RagebotGroupBox:AddToggle('AntiLagger',{Text='Anti Lagger',Default=false,
+            Callback=function(v) if v then EnableAntiServerLagger() else DisableAntiServerLagger() end end
+        })
+    end
+    RB.reloadTool = _G.rb_reloadTool or function()
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                for _, tool in ipairs(char:GetChildren()) do
+                    if tool:IsA('Tool') and tool:FindFirstChild('Ammo') then
+                        ReplicatedStorage.MainEvent:FireServer('Reload', tool)
+                    end
+                end
+            end
+        end)
     end
 
-    _G.rb_failedAmmoBuy = _G.rb_failedAmmoBuy or {}
+    if getgenv().rb_forceCFrameConn then getgenv().rb_forceCFrameConn:Disconnect() end
+    getgenv().rb_forceCFrameConn = RunService.Heartbeat:Connect(function()
+        if RB.forceCFrame then
+            local c = LocalPlayer.Character
+            local hrp = c and c:FindFirstChild('HumanoidRootPart')
+            if hrp then
+                hrp.CFrame = RB.forceCFrame
+                hrp.AssemblyLinearVelocity = Vector3.new(0, 1.85, 0)
+            end
+        end
+    end)
 
-    do
-        RB.getShopAmmoItem = function(gunName)
-            local shop = workspace:FindFirstChild('Ignored') and workspace.Ignored:FindFirstChild('Shop')
-            if not shop then return nil, nil end
-            local cleanGun = string.lower(gunName or ''):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
+    RB.getShopItem = function(targetName)
+        local shop = workspace:FindFirstChild('Ignored') and workspace.Ignored:FindFirstChild('Shop')
+        if not shop then return nil, nil end
+        local cleanTarget = string.lower(targetName or ''):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
+        if cleanTarget == '' then return nil, nil end
 
-            for _, item in ipairs(shop:GetChildren()) do
-                local cleanItem = string.lower(item.Name):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
-                if cleanItem:find(cleanGun, 1, true) and cleanItem:find("ammo", 1, true) then
+        local shopAliasTable = {
+            ['bag'] = {'brownbag', 'bag', 'christmas_sock'},
+            ['brownbag'] = {'brownbag', 'bag', 'christmas_sock'},
+            ['knife'] = {'knife'},
+            ['combat'] = {'combat', 'combatknife'},
+            ['bat'] = {'bat'},
+            ['stopsing'] = {'stopsign', 'stopsing'},
+            ['stopsign'] = {'stopsign', 'stopsing'},
+            ['sledgehammer'] = {'sledgehammer'},
+            ['doublebarrelsg'] = {'doublebarrelsg', 'doublebarrel'},
+            ['doublebarrel'] = {'doublebarrelsg', 'doublebarrel'},
+            ['db'] = {'doublebarrelsg', 'doublebarrel'},
+            ['shotgun'] = {'shotgun'},
+            ['tacticalshotgun'] = {'tacticalshotgun'},
+        }
+
+        local aliases = shopAliasTable[cleanTarget] or {cleanTarget}
+
+        for _, item in ipairs(shop:GetChildren()) do
+            local rawName = item.Name
+            local bracketName = string.match(rawName, '%b[]')
+            local cleanBracket = bracketName and string.lower(bracketName):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '') or ''
+            for _, alias in ipairs(aliases) do
+                if cleanBracket == alias then
                     local head = item:FindFirstChild('Head') or item:FindFirstChildOfClass('BasePart') or item:FindFirstChildWhichIsA('BasePart')
-                    local cd = item:FindFirstChildOfClass('ClickDetector')
+                    local cd = item:FindFirstChildOfClass('ClickDetector') or item:FindFirstChildWhichIsA('ClickDetector')
                     if not cd then
                         for _, v in ipairs(item:GetDescendants()) do
                             if v:IsA('ClickDetector') then cd = v; break end
@@ -8737,85 +9187,98 @@ do
                     if head and cd then return head, cd end
                 end
             end
+        end
 
-            local genericAmmoMap = {
-                ["doublebarrelsg"] = "12 gauge",
-                ["doublebarrel"] = "12 gauge",
-                ["shotgun"] = "12 gauge",
-                ["tacticalshotgun"] = "12 gauge",
-                ["revolver"] = "revolver",
-                ["glock"] = "9mm",
-                ["silencer"] = "9mm",
-                ["smg"] = "9mm",
-                ["p90"] = "9mm",
-                ["drumgun"] = "9mm",
-                ["ak47"] = "7.62",
-                ["ar"] = "5.56",
-                ["silencerar"] = "5.56",
-                ["aug"] = "5.56",
-                ["rifle"] = "5.56",
-                ["lmg"] = "5.56",
-                ["rpg"] = "rpg",
-                ["flamethrower"] = "flamethrower"
-            }
-            local ammoTerm = genericAmmoMap[cleanGun]
-            if ammoTerm then
-                local cleanAmmoTerm = string.lower(ammoTerm):gsub('%s', ''):gsub('-', '')
-                for _, item in ipairs(shop:GetChildren()) do
-                    local cleanItem = string.lower(item.Name):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
-                    if cleanItem:find(cleanAmmoTerm, 1, true) and (cleanItem:find("ammo", 1, true) or cleanAmmoTerm == "12gauge" or cleanAmmoTerm == "9mm" or cleanAmmoTerm == "7.62" or cleanAmmoTerm == "5.56") then
-                        local head = item:FindFirstChild('Head') or item:FindFirstChildOfClass('BasePart') or item:FindFirstChildWhichIsA('BasePart')
-                        local cd = item:FindFirstChildOfClass('ClickDetector')
-                        if not cd then
-                            for _, v in ipairs(item:GetDescendants()) do
-                                if v:IsA('ClickDetector') then cd = v; break end
-                            end
+        for _, item in ipairs(shop:GetChildren()) do
+            local rawName = item.Name
+            local bracketName = string.match(rawName, '%b[]')
+            local cleanBracket = bracketName and string.lower(bracketName):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '') or ''
+            local cleanItem = string.lower(rawName):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
+            for _, alias in ipairs(aliases) do
+                if cleanBracket:find(alias, 1, true) or cleanItem:find(alias, 1, true) then
+                    local head = item:FindFirstChild('Head') or item:FindFirstChildOfClass('BasePart') or item:FindFirstChildWhichIsA('BasePart')
+                    local cd = item:FindFirstChildOfClass('ClickDetector') or item:FindFirstChildWhichIsA('ClickDetector')
+                    if not cd then
+                        for _, v in ipairs(item:GetDescendants()) do
+                            if v:IsA('ClickDetector') then cd = v; break end
                         end
-                        if head and cd then return head, cd end
+                    end
+                    if head and cd then return head, cd end
+                end
+            end
+        end
+
+        return nil, nil
+    end
+
+    RB.findGun = function(parent)
+        if not parent then return nil end
+        for _, t in ipairs(parent:GetChildren()) do
+            if t:IsA('Tool') and t:FindFirstChild('Ammo') then
+                return t
+            end
+        end
+        return nil
+    end
+
+    RB.getCurrentGunName = function()
+        local char = LocalPlayer.Character
+        local bp   = LocalPlayer:FindFirstChild('Backpack')
+        local gun  = (char and RB.findGun(char)) or (bp and RB.findGun(bp))
+        if not gun then return nil end
+        return gun.Name:lower():gsub('[%[%]]', ''):gsub('%s', '')
+    end
+
+    RB.hasSpecificGun = function(wepName)
+        if not wepName then return false end
+        local clean = string.lower(wepName):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
+        if clean == '' then return false end
+        local function check(parent)
+            if not parent then return false end
+            for _, t in ipairs(parent:GetChildren()) do
+                if t:IsA('Tool') and t.Name ~= '' then
+                    local cleanTool = string.lower(t.Name):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
+                    if cleanTool == clean or cleanTool:find(clean, 1, true) or (#clean >= 3 and clean:find(cleanTool, 1, true)) then
+                        return true
                     end
                 end
             end
-            return nil, nil
+            return false
         end
+        local char = LocalPlayer.Character
+        local bp   = LocalPlayer:FindFirstChild('Backpack')
+        return check(char) or check(bp)
+    end
 
-        RB.buyAmmo = function(tool)
-            if RB.buyingAmmo or not tool then return end
-            if _G.rb_failedAmmoBuy[tool] and tick() < _G.rb_failedAmmoBuy[tool] then return end
-            RB.buyingAmmo = true
-            task.spawn(function()
-                pcall(function()
-                    local char = LocalPlayer.Character
-                    local hum  = char and char:FindFirstChildOfClass("Humanoid")
-                    if hum then pcall(function() hum:UnequipTools() end) end
+    RB.hasGun = function()
+        local char = LocalPlayer.Character
+        local bp   = LocalPlayer:FindFirstChild('Backpack')
+        return (char and RB.findGun(char)) ~= nil or (bp and RB.findGun(bp)) ~= nil
+    end
 
-                    RB.reloadTool()
-                    task.wait(0.05)
-                    if tool:FindFirstChild("Ammo") and tool.Ammo.Value > 0 then
-                        RB.buyingAmmo = false
-                        return
-                    end
+    RB.buyGun = function(wepName)
+        if RB.buyingWeapon then return end
+        if RB.hasSpecificGun(wepName) then return end
+        RB.buyingWeapon = true
+        task.spawn(function()
+            pcall(function()
+                local char = LocalPlayer.Character
+                local hrp  = char and char:FindFirstChild('HumanoidRootPart')
+                if not hrp then RB.buyingWeapon = false return end
+                local origCF = hrp.CFrame
 
-                    local char = LocalPlayer.Character
-                    local hrp  = char and char:FindFirstChild('HumanoidRootPart')
-                    if not hrp then RB.buyingAmmo = false return end
-                    local origCF = hrp.CFrame
-
-                    local gunName = tool.Name:gsub('[%[%]]', ''):gsub('%s', '')
-                    local head, cd = RB.getShopAmmoItem(gunName)
-                    if not head or not cd then
-                        _G.rb_failedAmmoBuy[tool] = tick() + 5
-                        RB.buyingAmmo = false
-                        return
-                    end
-
+                local head, cd = RB.getShopItem(wepName)
+                if not head or not cd then
+                    head, cd = RB.getShopItem(wepName:gsub('%s+', ''):gsub('-', ''))
+                end
+                if head and cd then
                     local shopCF = CFrame.new(head.Position - Vector3.new(0, 5.5, 0))
                     local attempts = 0
-                    while attempts < 25 do
+                    while not RB.hasSpecificGun(wepName) and attempts < 25 do
                         local c = LocalPlayer.Character
                         local r = c and c:FindFirstChild('HumanoidRootPart')
                         local h = c and c:FindFirstChildOfClass('Humanoid')
                         if not r or not h or h.Health <= 0 then break end
-                        if tool:FindFirstChild('Ammo') and tool.Ammo.Value > 0 then break end
 
                         RB.forceCFrame = shopCF
                         r.CFrame = shopCF
@@ -8827,177 +9290,560 @@ do
                         pcall(function() fireclickdetector(cd, 10) end)
                         pcall(function() fireclickdetector(cd, 0, 'MouseClick') end)
                         pcall(function() fireclickdetector(cd, 1) end)
-                        pcall(function() ReplicatedStorage.MainEvent:FireServer("Reload", tool) end)
                         task.wait(0.08)
+                        if RB.hasSpecificGun(wepName) then break end
                         attempts = attempts + 1
                     end
                     RB.forceCFrame = nil
                     local c2 = LocalPlayer.Character
                     local r2 = c2 and c2:FindFirstChild('HumanoidRootPart')
                     if r2 then r2.CFrame = origCF end
-
-                    if tool:FindFirstChild('Ammo') and tool.Ammo.Value <= 0 then
-                        _G.rb_failedAmmoBuy[tool] = tick() + 5
-                    end
-                end)
-                RB.forceCFrame = nil
-                RB.buyingAmmo = false
+                end
             end)
-        end
+            RB.forceCFrame = nil
+            RB.buyingWeapon = false
+        end)
     end
 
+    _G.rb_failedAmmoBuy = _G.rb_failedAmmoBuy or {}
+
+    RB.getShopAmmoItem = function(gunName)
+        local shop = workspace:FindFirstChild('Ignored') and workspace.Ignored:FindFirstChild('Shop')
+        if not shop then return nil, nil end
+        local cleanGun = string.lower(gunName or ''):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
+
+        for _, item in ipairs(shop:GetChildren()) do
+            local cleanItem = string.lower(item.Name):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
+            if cleanItem:find(cleanGun, 1, true) and cleanItem:find('ammo', 1, true) then
+                local head = item:FindFirstChild('Head') or item:FindFirstChildOfClass('BasePart') or item:FindFirstChildWhichIsA('BasePart')
+                local cd = item:FindFirstChildOfClass('ClickDetector')
+                if not cd then
+                    for _, v in ipairs(item:GetDescendants()) do
+                        if v:IsA('ClickDetector') then cd = v; break end
+                    end
+                end
+                if head and cd then return head, cd end
+            end
+        end
+
+        local genericAmmoMap = {
+            ['doublebarrelsg'] = '12 gauge',
+            ['doublebarrel'] = '12 gauge',
+            ['shotgun'] = '12 gauge',
+            ['tacticalshotgun'] = '12 gauge',
+            ['revolver'] = 'revolver',
+            ['glock'] = '9mm',
+            ['silencer'] = '9mm',
+            ['smg'] = '9mm',
+            ['p90'] = '9mm',
+            ['drumgun'] = '9mm',
+            ['ak47'] = '7.62',
+            ['ar'] = '5.56',
+            ['silencerar'] = '5.56',
+            ['aug'] = '5.56',
+            ['rifle'] = '5.56',
+            ['lmg'] = '5.56',
+            ['rpg'] = 'rpg',
+            ['flamethrower'] = 'flamethrower'
+        }
+        local ammoTerm = genericAmmoMap[cleanGun]
+        if ammoTerm then
+            local cleanAmmoTerm = string.lower(ammoTerm):gsub('%s', ''):gsub('-', '')
+            for _, item in ipairs(shop:GetChildren()) do
+                local cleanItem = string.lower(item.Name):gsub('[%[%]]', ''):gsub('%s', ''):gsub('-', '')
+                if cleanItem:find(cleanAmmoTerm, 1, true) and (cleanItem:find('ammo', 1, true) or cleanAmmoTerm == '12gauge' or cleanAmmoTerm == '9mm' or cleanAmmoTerm == '7.62' or cleanAmmoTerm == '5.56') then
+                    local head = item:FindFirstChild('Head') or item:FindFirstChildOfClass('BasePart') or item:FindFirstChildWhichIsA('BasePart')
+                    local cd = item:FindFirstChildOfClass('ClickDetector')
+                    if not cd then
+                        for _, v in ipairs(item:GetDescendants()) do
+                            if v:IsA('ClickDetector') then cd = v; break end
+                        end
+                    end
+                    if head and cd then return head, cd end
+                end
+            end
+        end
+        return nil, nil
+    end
+
+    RB.buyAmmo = function(tool)
+        if RB.buyingAmmo or not tool then return end
+        if _G.rb_failedAmmoBuy[tool] and tick() < _G.rb_failedAmmoBuy[tool] then return end
+        RB.buyingAmmo = true
+        task.spawn(function()
+            pcall(function()
+                local char = LocalPlayer.Character
+                local hum  = char and char:FindFirstChildOfClass('Humanoid')
+                if hum then pcall(function() hum:UnequipTools() end) end
+
+                RB.reloadTool()
+                task.wait(0.05)
+                if tool:FindFirstChild('Ammo') and tool.Ammo.Value > 0 then
+                    RB.buyingAmmo = false
+                    return
+                end
+
+                local char = LocalPlayer.Character
+                local hrp  = char and char:FindFirstChild('HumanoidRootPart')
+                if not hrp then RB.buyingAmmo = false return end
+                local origCF = hrp.CFrame
+
+                local gunName = tool.Name:gsub('[%[%]]', ''):gsub('%s', '')
+                local head, cd = RB.getShopAmmoItem(gunName)
+                if not head or not cd then
+                    _G.rb_failedAmmoBuy[tool] = tick() + 5
+                    RB.buyingAmmo = false
+                    return
+                end
+
+                local shopCF = CFrame.new(head.Position - Vector3.new(0, 5.5, 0))
+                local attempts = 0
+                while attempts < 25 do
+                    local c = LocalPlayer.Character
+                    local r = c and c:FindFirstChild('HumanoidRootPart')
+                    local h = c and c:FindFirstChildOfClass('Humanoid')
+                    if not r or not h or h.Health <= 0 then break end
+                    if tool:FindFirstChild('Ammo') and tool.Ammo.Value > 0 then break end
+
+                    RB.forceCFrame = shopCF
+                    r.CFrame = shopCF
+                    r.AssemblyLinearVelocity = Vector3.zero
+                    r.AssemblyAngularVelocity = Vector3.zero
+                    pcall(function() fireclickdetector(cd) end)
+                    pcall(function() fireclickdetector(cd, 0) end)
+                    pcall(function() fireclickdetector(cd, 5) end)
+                    pcall(function() fireclickdetector(cd, 10) end)
+                    pcall(function() fireclickdetector(cd, 0, 'MouseClick') end)
+                    pcall(function() fireclickdetector(cd, 1) end)
+                    pcall(function() ReplicatedStorage.MainEvent:FireServer('Reload', tool) end)
+                    task.wait(0.08)
+                    attempts = attempts + 1
+                end
+                RB.forceCFrame = nil
+                local c2 = LocalPlayer.Character
+                local r2 = c2 and c2:FindFirstChild('HumanoidRootPart')
+                if r2 then r2.CFrame = origCF end
+
+                if tool:FindFirstChild('Ammo') and tool.Ammo.Value <= 0 then
+                    _G.rb_failedAmmoBuy[tool] = tick() + 5
+                end
+            end)
+            RB.forceCFrame = nil
+            RB.buyingAmmo = false
+        end)
+    end
+
+    task.spawn(function()
+        while true do
+            task.wait(0.5)
+            if ragebotenabled and ragebotactive and not RB.buyingWeapon and not RB.buyingAmmo then
+                if RB.autoBuyWeapon then
+                    local weapons = Options.RbAutoBuyWeaponSelect and Options.RbAutoBuyWeaponSelect.Value
+                    local wepList = {}
+                    if type(weapons) == 'table' then
+                        for name, sel in pairs(weapons) do
+                            if type(name) == 'number' and type(sel) == 'string' then
+                                table.insert(wepList, sel)
+                            elseif type(name) == 'string' and sel == true then
+                                table.insert(wepList, name)
+                            end
+                        end
+                    end
+                    if #wepList > 0 then
+                        for _, wn in ipairs(wepList) do
+                            if not RB.hasSpecificGun(wn) then
+                                RB.buyGun(wn)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    task.spawn(function()
+        while true do
+            local names={}
+            for _, p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then table.insert(names, p.DisplayName .. " (@" .. p.Name .. ")") end end
+            Options.ragebottargets:SetValues(names)
+            task.wait(1.5)
+        end
+    end)
+
     do
-        RB.getMyBag = function()
-            local char = LocalPlayer.Character
-            local bp   = LocalPlayer:FindFirstChild("Backpack")
-            if not char and not bp then return nil end
-            for _, name in ipairs({'[BrownBag]','[Christmas_Sock]','[Bag]','BrownBag','Bag'}) do
-                local t = (char and char:FindFirstChild(name)) or (bp and bp:FindFirstChild(name))
-                if t then return t end
-            end
-            if char then
-                for _, t in ipairs(char:GetChildren()) do
-                    if t:IsA('Tool') and t.Name:lower():find('bag') then return t end
+        local _PlayersRef = cloneref(game:GetService("Players"))
+        local _LocalClient = _PlayersRef.LocalPlayer
+        local hitboxSize = 25
+        local normalSize = Vector3.new(2, 2, 1)
+        local expandedSize = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+        RunService.Heartbeat:Connect(function()
+            local active = ragebotactive and _G.rb_teleporting
+            local targetSize = active and expandedSize or normalSize
+            local targetCollide = not active
+            for _, plr in ipairs(_PlayersRef:GetPlayers()) do
+                if plr ~= _LocalClient then
+                    local char = plr.Character
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    if hrp and hrp.Size ~= targetSize then
+                        hrp.Size = targetSize
+                        hrp.CanCollide = targetCollide
+                    end
                 end
             end
-            if bp then
-                for _, t in ipairs(bp:GetChildren()) do
-                    if t:IsA('Tool') and t.Name:lower():find('bag') then return t end
+        end)
+    end
+
+    _G.rb_lastBaitTick = tick()
+    _G.rb_isBaitFlashing = false
+    _G.rb_baitCFrame = nil
+
+    task.spawn(function()
+        while true do
+            if ragebotactive and _G.rb_voiding then
+                local char = LocalPlayer.Character
+                local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    if _G.rb_voidBait then
+                        local now = tick()
+                        local diff = now - (_G.rb_lastBaitTick or now)
+                        local cooldown = 0.5   
+                        local baitTime = 0.035 
+
+                        if diff > cooldown then
+                            _G.rb_lastBaitTick = now
+                            local basePos = Vector3.new(0, 10, 0)
+                            if lockedTarget and lockedTarget.Character and lockedTarget.Character:FindFirstChild("HumanoidRootPart") then
+                                basePos = lockedTarget.Character.HumanoidRootPart.Position
+                            elseif _G.rb_originalPosition then
+                                basePos = typeof(_G.rb_originalPosition) == "CFrame" and _G.rb_originalPosition.Position or _G.rb_originalPosition
+                            end
+                            if typeof(basePos) == "CFrame" then
+                                basePos = basePos.Position
+                            end
+                            _G.rb_baitCFrame = CFrame.new(basePos + Vector3.new(math.random(-150, 150), math.random(5, 30), math.random(-150, 150)))
+                            _G.rb_isBaitFlashing = true
+                            hrp.CFrame = _G.rb_baitCFrame
+                        elseif diff < baitTime and _G.rb_isBaitFlashing and _G.rb_baitCFrame then
+                            hrp.CFrame = _G.rb_baitCFrame
+                        else
+                            _G.rb_isBaitFlashing = false
+                            hrp.CFrame = CFrame.new(
+                                math.random(-450000000,-100000000),
+                                math.random(100000000,450000000),
+                                math.random(-450000000,-100000000)
+                            )
+                        end
+                    else
+                        hrp.CFrame = CFrame.new(
+                            math.random(-450000000,-100000000),
+                            math.random(100000000,450000000),
+                            math.random(-450000000,-100000000)
+                        )
+                    end
                 end
             end
-            return nil
+            task.wait()
         end
+    end)
 
-        RB.isTargetBagged = function(plr)
-            if not plr or not plr.Character then return false end
-            for _, name in ipairs({'Christmas_Sock','BrownBag','Bag','SantaBag','HalloweenBag','Socks'}) do
-                local c = plr.Character:FindFirstChild(name, true)
-                if c and not c:IsA('Tool') then return true end
+
+    do
+        local _pGui = LocalPlayer:WaitForChild("PlayerGui")
+        local _sGui = Instance.new("ScreenGui")
+        _sGui.Name="RagebotStatusGui" _sGui.ResetOnSpawn=false _sGui.Parent=_pGui
+        local _mLabel = Instance.new("TextLabel")
+        _mLabel.BackgroundTransparency=1 _mLabel.Size=UDim2.new(1,0,0,30)
+        _mLabel.Position=UDim2.new(0,0,0.5,0) _mLabel.AnchorPoint=Vector2.new(0,0.5)
+        _mLabel.Font=2 _mLabel.TextSize=13
+        _mLabel.TextXAlignment=Enum.TextXAlignment.Center
+        _mLabel.TextColor3=Color3.fromRGB(255,255,255) _mLabel.TextStrokeColor3=Color3.fromRGB(0,0,0)
+        _mLabel.TextStrokeTransparency=0 _mLabel.Text="" _mLabel.Parent=_sGui
+        _G.rb_messageLabel = _mLabel
+    end
+    _G.rb_reloadTool = function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, tool in ipairs(char:GetChildren()) do
+            if tool:IsA("Tool") and tool:FindFirstChild("Ammo") and tool.Ammo.Value <= 0 then
+                MainEvent:FireServer("Reload", tool)
             end
-            return false
-        end
-
-        RB.buyBag = function()
-            if RB.buyingBag then return end
-            if RB.getMyBag() then return end
-            RB.buyingBag = true
-            task.spawn(function()
-                pcall(function()
-                    local char = LocalPlayer.Character
-                    local hrp  = char and char:FindFirstChild('HumanoidRootPart')
-                    if not hrp then RB.buyingBag = false return end
-                    local origCF = hrp.CFrame
-                    local head, cd = RB.getShopItem('bag')
-                    if not head or not cd then
-                        head, cd = RB.getShopItem('brownbag')
-                    end
-                    if not head or not cd then RB.buyingBag = false return end
-                    local shopCF = CFrame.new(head.Position - Vector3.new(0, 5.5, 0))
-                    local attempts = 0
-                    while RB.getMyBag() == nil and attempts < 15 do
-                        local c = LocalPlayer.Character
-                        if not c then break end
-                        local r = c:FindFirstChild('HumanoidRootPart')
-                        local h = c:FindFirstChildOfClass('Humanoid')
-                        if not r or not h or h.Health <= 0 then break end
-                        RB.forceCFrame = shopCF
-                        r.CFrame = shopCF
-                        r.AssemblyLinearVelocity = Vector3.new(0, 1.85, 0)
-                        task.wait(0.08)
-                        pcall(function() fireclickdetector(cd) end)
-                        pcall(function() fireclickdetector(cd, 0) end)
-                        pcall(function() fireclickdetector(cd, 0, 'MouseClick') end)
-                        task.wait(0.1)
-                        attempts = attempts + 1
-                    end
-                    RB.forceCFrame = nil
-                    local c2 = LocalPlayer.Character
-                    local r2 = c2 and c2:FindFirstChild('HumanoidRootPart')
-                    if r2 then r2.CFrame = origCF end
-                end)
-                RB.forceCFrame = nil
-                RB.buyingBag = false
-            end)
-        end
-
-        RB.getBagCFrame = function(targetRoot)
-            if not targetRoot then return nil end
-            local baseCF = targetRoot.CFrame * CFrame.Angles(math.rad(90), 0, math.rad(180)) - Vector3.new(0, 0.5, 0)
-            return baseCF
-        end
-        _G.rb_getBagCFrame = RB.getBagCFrame
-
-        RB.useBag = function(target)
-            if _G.rb_bagging then return end
-            if RB.isTargetBagged(target) then return end
-            local bag = RB.getMyBag()
-            if not bag or not target or not target.Character then return end
-            _G.rb_bagging = true
-            task.spawn(function()
-                pcall(function()
-                    local attempts = 0
-                    while not RB.isTargetBagged(target) and attempts < 25 do
-                        local char = LocalPlayer.Character
-                        local root = char and char:FindFirstChild('HumanoidRootPart')
-                        local hum  = char and char:FindFirstChildOfClass('Humanoid')
-                        if not root or not hum or hum.Health <= 0 then break end
-                        local targetChar = target.Character
-                        local targetRoot = targetChar and targetChar:FindFirstChild('HumanoidRootPart')
-                        if not targetRoot then break end
-                        local tBE = targetChar:FindFirstChild('BodyEffects')
-                        if (tBE and tBE:FindFirstChild('K.O') and tBE['K.O'].Value)
-                        or (tBE and tBE:FindFirstChild('SDeath') and tBE['SDeath'].Value) then break end
-                        bag = RB.getMyBag()
-                        if not bag then break end
-                        local tPart = targetChar:FindFirstChild('UpperTorso') or targetChar:FindFirstChild('Head') or targetRoot
-                        local bagCF = RB.getBagCFrame(targetRoot)
-                        if bagCF then
-                            RB.forceCFrame = bagCF
-                            pcall(function()
-                                root.CFrame = bagCF
-                                root.AssemblyLinearVelocity = Vector3.zero
-                                root.Velocity = Vector3.zero
-                            end)
-                        end
-                        pcall(function() hum:EquipTool(bag) end)
-                        task.wait(0.02)
-                        pcall(function() bag:Activate() end)
-                        local handle = bag:FindFirstChild('Handle') or bag:FindFirstChildOfClass('Part') or bag:FindFirstChildWhichIsA('BasePart')
-                        if handle and tPart and firetouchinterest then
-                            pcall(function() firetouchinterest(handle, tPart, 0) firetouchinterest(handle, tPart, 1) end)
-                        end
-                        pcall(function()
-                            local ev = ReplicatedStorage:FindFirstChild('MainEvent')
-                            if ev then ev:FireServer('Bag', targetRoot) ev:FireServer('UseBag', target) ev:FireServer('BagPlayer', target) end
-                        end)
-                        task.wait(0.04)
-                        attempts = attempts + 1
-                    end
-                end)
-                RB.forceCFrame = nil
-                _G.rb_bagging = false
-            end)
         end
     end
 
     task.spawn(function()
-        local localPlayerDiedThisLife = false
-        while task.wait(0.2) do
+        while true do
             local char = LocalPlayer.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            local be = char and char:FindFirstChild("BodyEffects")
-            local isDead = (hum and hum.Health <= 0) or (be and be:FindFirstChild("SDeath") and be.SDeath.Value == true)
-            if isDead then
-                if not localPlayerDiedThisLife then
-                    localPlayerDiedThisLife = true
-                    if RB.notificationsEnabled then
-                        RB.deathCount = RB.deathCount + 1
-                        Library:Notify(string.format("✦ DEATH  [%d / %d]", RB.killCount, RB.deathCount), 4)
+            if char then
+                for _, tool in ipairs(char:GetChildren()) do
+                    if tool:IsA("Tool") and tool:FindFirstChild("Ammo") and tool.Ammo.Value <= 0 then
+                        MainEvent:FireServer("Reload", tool)
                     end
                 end
-            else
-                localPlayerDiedThisLife = false
+                local be = char:FindFirstChild("BodyEffects")
+                local koVal = be and be:FindFirstChild("K.O")
+                if ragebotactive and koVal and koVal.Value == true then
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if hum then hum.Health = 0 end
+                end
             end
+            task.wait(0.25)
+        end
+    end)
+
+    task.spawn(function()
+        local alreadyDiedThisLife = false
+
+        local function hookChar(char)
+            if not char then return end
+            alreadyDiedThisLife = false
+            local hum = char:WaitForChild("Humanoid", 5)
+            local be = char:WaitForChild("BodyEffects", 5)
+
+            local function triggerDeath()
+                if not ragebotNotificationsEnabled then return end
+                if alreadyDiedThisLife then return end
+                alreadyDiedThisLife = true
+                deathCount = deathCount + 1
+                if showKillDeathNotify then
+                    showKillDeathNotify('death', nil, killCount, deathCount)
+                end
+            end
+
+            if hum then
+                hum.Died:Connect(triggerDeath)
+            end
+
+            if be then
+                local ko = be:WaitForChild("K.O", 3)
+                if ko and ko:IsA("BoolValue") then
+                    ko:GetPropertyChangedSignal("Value"):Connect(function()
+                        if ko.Value == true then
+                            triggerDeath()
+                        elseif ko.Value == false and hum and hum.Health > 0 then
+                            alreadyDiedThisLife = false
+                        end
+                    end)
+                    if ko.Value == true then
+                        triggerDeath()
+                    end
+                end
+
+                local dead = be:FindFirstChild("Dead") or be:FindFirstChild("SDeath")
+                if dead and dead:IsA("BoolValue") then
+                    dead:GetPropertyChangedSignal("Value"):Connect(function()
+                        if dead.Value == true then
+                            triggerDeath()
+                        end
+                    end)
+                end
+            end
+        end
+
+        if LocalPlayer.Character then
+            hookChar(LocalPlayer.Character)
+        end
+        LocalPlayer.CharacterAdded:Connect(hookChar)
+
+        while true do
+            if ragebotNotificationsEnabled then
+                local char = LocalPlayer.Character
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
+                local be = char and char:FindFirstChild("BodyEffects")
+                local ko = be and be:FindFirstChild("K.O")
+                local dead = be and (be:FindFirstChild("Dead") or be:FindFirstChild("SDeath"))
+
+                local isDeadOrKO = (hum and hum.Health <= 0) or (ko and ko.Value == true) or (dead and dead.Value == true)
+
+                if isDeadOrKO then
+                    if not alreadyDiedThisLife then
+                        alreadyDiedThisLife = true
+                        deathCount = deathCount + 1
+                        if showKillDeathNotify then
+                            showKillDeathNotify('death', nil, killCount, deathCount)
+                        end
+                    end
+                elseif hum and hum.Health > 0 and ko and ko.Value == false then
+                    alreadyDiedThisLife = false
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
+
+    _G.rb_clusterHistory = _G.rb_clusterHistory or {}
+    _G.rb_lastPosSample = _G.rb_lastPosSample or nil
+    _G.rb_lastSampleTime = _G.rb_lastSampleTime or tick()
+    _G.rb_resolverEnabled = (_G.rb_resolverEnabled ~= false)
+
+    local BURST_PACKETS = 2
+
+    pcall(function()
+        RagebotGroupBox:AddToggle('RbResolver',{Text='Resolver (All-in-One)',Default=true,
+            Callback=function(v) _G.rb_resolverEnabled=v end})
+        RagebotGroupBox:AddToggle('VoidBait',{Text='Void Bait',Default=false,
+            Callback=function(v) _G.rb_voidBait=v end})
+    end)
+
+
+
+    local function resolveTarget(tChar)
+        local tHead = tChar:FindFirstChild('Head')
+        local tHRP  = tChar:FindFirstChild('HumanoidRootPart')
+        local tTorso = tChar:FindFirstChild('UpperTorso') or tChar:FindFirstChild('Torso') or tHRP
+        if not tHRP then return nil, nil end
+
+        local rawPos = tHRP.Position
+        local now = tick()
+        local dt = math.clamp(now - (_G.rb_lastSampleTime or now), 0.001, 0.2)
+        _G.rb_lastSampleTime = now
+
+        local engineVel = tHRP.AssemblyLinearVelocity
+        local angVel = tHRP.AssemblyAngularVelocity
+        local speed = engineVel.Magnitude
+        local angSpeed = angVel.Magnitude
+
+        local deltaVel = Vector3.new(0, 0, 0)
+        if _G.rb_lastPosSample then
+            local rawDelta = (rawPos - _G.rb_lastPosSample) / dt
+            if rawDelta.Magnitude < 150 then
+                deltaVel = rawDelta
+            end
+        end
+        _G.rb_lastPosSample = rawPos
+
+        local isSpinning = (angSpeed > 15)
+        local isDesyncing = isSpinning or (speed > 50) or (math.abs(engineVel.Y) > 40) or (speed > 8 and deltaVel.Magnitude < 2.5) or (deltaVel.Magnitude > 50)
+
+        local tBE = tChar:FindFirstChild('BodyEffects')
+        local isKO = tBE and tBE:FindFirstChild('K.O') and tBE['K.O'].Value
+
+        local hitPart
+        if isSpinning then
+            hitPart = tTorso
+        else
+            hitPart = isKO and tTorso or (tHead or tHRP)
+        end
+        local targetYOffset = (hitPart == tHead) and 1.4 or 0.1
+
+        if not _G.rb_resolverEnabled then
+            return hitPart.Position, hitPart
+        end
+
+        local bonePos = hitPart.Position
+        local isInVoid = rawPos.Y < -30
+        if isInVoid then
+            if _G.rb_lastKnownTargetPos and _G.rb_lastKnownTargetPos.Y >= -30 then
+                rawPos = _G.rb_lastKnownTargetPos
+                bonePos = _G.rb_lastKnownTargetPos + Vector3.new(0, targetYOffset, 0)
+            else
+                rawPos = Vector3.new(rawPos.X, 5, rawPos.Z)
+                bonePos = Vector3.new(bonePos.X, 5 + targetYOffset, bonePos.Z)
+            end
+        else
+            _G.rb_lastKnownTargetPos = rawPos
+        end
+
+        if isDesyncing then
+            return bonePos, hitPart
+        end
+
+        local effectiveVel = Vector3.new(0, 0, 0)
+        if speed > 2 and speed <= 50 then
+            effectiveVel = engineVel:Lerp(deltaVel, 0.35)
+        end
+
+        local predTime = 0.135
+        pcall(function()
+            local pingStat = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]
+            if pingStat then
+                local pVal = pingStat:GetValue()
+                if pVal and pVal > 0 then
+                    predTime = math.clamp((pVal / 1000) + 0.015, 0.03, 0.2)
+                end
+            end
+        end)
+
+        local hitPos = bonePos
+        if effectiveVel.Magnitude > 1.5 then
+            hitPos = hitPos + (effectiveVel * predTime)
+        end
+
+        return hitPos, hitPart
+    end
+
+    local function getOrigin(handle)
+        return handle and handle.Position or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild('HumanoidRootPart') and LocalPlayer.Character.HumanoidRootPart.Position)
+    end
+
+    RunService.Heartbeat:Connect(function()
+        if not ragebotactive or not lockedTarget then return end
+        if flamethrower_hack then return end
+        local tChar  = lockedTarget.Character
+        local myChar = LocalPlayer.Character
+        if not myChar then return end
+        local tBE       = tChar and tChar:FindFirstChild('BodyEffects')
+        local tKO       = tBE and tBE:FindFirstChild('K.O') and tBE['K.O'].Value
+        local isGrabbed = tChar and tChar:FindFirstChild('GRABBING_CONSTRAINT')
+        if tKO or isGrabbed then return end
+        if not tChar then
+            if _G.rb_lastKnownTargetPos then
+                for _, tool in ipairs(myChar:GetChildren()) do
+                    if tool:IsA('Tool') and tool:FindFirstChild('Handle') then
+                        local h = tool.Handle
+                        local orig = getOrigin(h)
+                        for i = 1, BURST_PACKETS do
+                            MainEvent:FireServer('ShootGun', h, orig, _G.rb_lastKnownTargetPos, nil, Vector3.new(0,0,0))
+                        end
+                    end
+                end
+            end
+            return
+        end
+        local hitPos, hitPart = resolveTarget(tChar)
+        if not hitPos then return end
+        for _, tool in ipairs(myChar:GetChildren()) do
+            if tool:IsA('Tool') and tool:FindFirstChild('Handle') then
+                local h = tool.Handle
+                local orig = getOrigin(h)
+                for i = 1, BURST_PACKETS do
+                    MainEvent:FireServer('ShootGun', h, orig, hitPos, hitPart, Vector3.new(0,0,0))
+                end
+            end
+        end
+    end)
+
+    task.spawn(function()
+        local fn = "[Flamethrower]"
+        local reloading = false
+        while true do
+            local char = LocalPlayer.Character
+            local bp   = LocalPlayer:FindFirstChild("Backpack")
+            local tChar = lockedTarget and lockedTarget.Character
+            local tBE   = tChar and tChar:FindFirstChild("BodyEffects")
+            local tDead = tBE and tBE:FindFirstChild("SDeath") and tBE["SDeath"].Value
+            local tKO   = tBE and tBE:FindFirstChild("K.O")    and tBE["K.O"].Value
+            local tFF   = tChar and tChar:FindFirstChildOfClass("ForceField")
+            local shouldFire = ragebotactive and flamethrower_hack and lockedTarget and char and bp and not tDead and not tFF and not (tKO and ragebotstompactive)
+            if shouldFire then
+                local myBE = char:FindFirstChild("BodyEffects")
+                local myReloading = myBE and myBE:FindFirstChild("Reload") and myBE.Reload.Value
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 and not myReloading then
+                    for _, tool in ipairs(char:GetChildren()) do
+                        if tool:IsA("Tool") and tool.Name ~= fn then tool.Parent = bp end
+                    end
+                    local ft = char:FindFirstChild(fn) or bp:FindFirstChild(fn)
+                    if ft then
+                        if ft.Parent ~= char then ft.Parent = char end
+                        local ammo = ft:FindFirstChild("Ammo")
+                        if ammo and ammo.Value <= 0 and not reloading then
+                            reloading=true MainEvent:FireServer("Reload", ft)
+                            task.wait(2.5) reloading=false
+                        elseif not reloading then ft:Activate() end
+                    end
+                end
+            else reloading=false end
+            task.wait()
         end
     end)
 
@@ -9008,75 +9854,22 @@ do
                 local hum  = char:FindFirstChildOfClass("Humanoid")
                 local root = hum and hum.RootPart
                 if root then
-                    if _G.rb_bagging and RB.lockedTarget and RB.lockedTarget.Character then
-                        local tHRP = RB.lockedTarget.Character:FindFirstChild("HumanoidRootPart")
-                        if tHRP then
-                            if sethiddenproperty then pcall(sethiddenproperty, root, "PhysicsRepRootPart", tHRP) end
-                            RB.forceCFrame = _G.rb_getBagCFrame(tHRP)
-                        else
-                            if sethiddenproperty then pcall(sethiddenproperty, root, "PhysicsRepRootPart", nil) end
-                        end
-                    else
-                        if sethiddenproperty then pcall(sethiddenproperty, root, "PhysicsRepRootPart", nil) end
-                    end
+                    if ragebotactive and flamethrower_hack and lockedTarget and lockedTarget.Character then
+                        local tChar = lockedTarget.Character
+                        local tHum  = tChar:FindFirstChildOfClass("Humanoid")
+                        local tRoot = tHum and tHum.RootPart
+                        if tRoot then pcall(sethiddenproperty, root, "PhysicsRepRootPart", tRoot) end
+                    else pcall(sethiddenproperty, root, "PhysicsRepRootPart", nil) end
                 end
             end
         end
     end)
 
-    _G.rbStompFrameCount = 0
-
-    _G.rb_steppedMove = function(root, targetCF)
-        if not root or not root.Parent then return end
-        local dist = (root.CFrame.Position - targetCF.Position).Magnitude
-        if dist < 4 then
-            pcall(function()
-                root.CFrame = targetCF
-                root.AssemblyLinearVelocity = Vector3.zero
-            end)
-            return
-        end
-        local steps = math.clamp(math.floor(dist / 15), 1, 4)
-        local startCF = root.CFrame
-        local dir = (targetCF.Position - startCF.Position).Unit
-        pcall(function()
-            root.AssemblyLinearVelocity = dir * math.clamp(dist * 3, 30, 90)
-        end)
-        for i = 1, steps do
-            local alpha = i / steps
-            local midPos = startCF.Position:Lerp(targetCF.Position, alpha)
-            local midCF  = CFrame.new(midPos, midPos + (targetCF.LookVector))
-            pcall(function()
-                root.CFrame = midCF
-                if i < steps then
-                    root.AssemblyLinearVelocity = dir * math.clamp(dist * 3 * (1 - alpha * 0.5), 20, 90)
-                else
-                    root.AssemblyLinearVelocity = Vector3.zero
-                end
-            end)
-            if i < steps then RunService.Heartbeat:Wait() end
-        end
-        pcall(function() root.CFrame = targetCF end)
-    end
-
     RunService.Heartbeat:Connect(function(dt)
-        if not RB.active then
-            _G.rb_isInCombat=false
-            local char = LocalPlayer.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            if root and RB.savedCFrame then
-                pcall(function()
-                    root.Velocity = Vector3.zero
-                    root.RotVelocity = Vector3.zero
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                    root.CFrame = RB.savedCFrame
-                end)
-                RB.savedCFrame = nil
-            end
-            RB.setStatus("")
-            if not RB.viewactive and not kfSpectating and LocalPlayer.Character then
-                workspace.CurrentCamera.CameraSubject = LocalPlayer.Character:FindFirstChild("Humanoid")
+        if not ragebotactive then
+            _G.rb_messageLabel.Text="" _G.rb_isInCombat=false
+            if not ragebotviewactive then
+                workspace.CurrentCamera.CameraSubject = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
             end
             return
         end
@@ -9084,69 +9877,32 @@ do
         local RootPart  = Character and Character:FindFirstChild("HumanoidRootPart")
         if not RootPart then return end
         local BodyEffects = Character:FindFirstChild("BodyEffects")
-        local isReloadingValue = BodyEffects and BodyEffects:FindFirstChild("Reload") and BodyEffects.Reload.Value
-
-        local isLowAmmo = false
-        local emptyGunTool = nil
-        for _, tool in ipairs(Character:GetChildren()) do
-            if tool:IsA("Tool") and tool:FindFirstChild("Ammo") then
-                if tool.Ammo.Value <= 0 then
-                    isLowAmmo = true
-                    emptyGunTool = tool
-                    break
-                end
-            end
-        end
-
-        if not emptyGunTool and LocalPlayer.Backpack then
-            for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
-                if tool:IsA("Tool") and tool:FindFirstChild("Ammo") and tool.Ammo.Value <= 0 then
-                    emptyGunTool = tool
-                    break
-                end
-            end
-        end
-
-        if RB.autoBuyAmmo and emptyGunTool and not RB.buyingWeapon and not RB.buyingAmmo then
-            if not _G.rb_failedAmmoBuy[emptyGunTool] or tick() > _G.rb_failedAmmoBuy[emptyGunTool] then
-                local hum = Character:FindFirstChildOfClass("Humanoid")
-                if hum then pcall(function() hum:UnequipTools() end) end
-                _G.rb_voiding = true
-                _G.rb_teleporting = false
-                RB.setStatus('buying ammo: ' .. emptyGunTool.Name)
-                RB.buyAmmo(emptyGunTool)
-                return
-            end
-        end
-
-        if isReloadingValue or isLowAmmo then
-            _G.rb_voiding = true
-            _G.rb_teleporting = false
-            RB.setStatus("reloading... (void)")
-            RB.voidSelf(RootPart)
-            RB.reloadTool()
-            if RB.viewactive and RB.lockedTarget and RB.lockedTarget.Character then
-                local tHumanoid   = RB.lockedTarget.Character:FindFirstChildOfClass("Humanoid")
-                local tUpperTorso = RB.lockedTarget.Character:FindFirstChild("UpperTorso")
-                workspace.CurrentCamera.CameraSubject = tHumanoid or tUpperTorso or Character:FindFirstChild("Humanoid")
-            elseif not kfSpectating then
-                workspace.CurrentCamera.CameraSubject = Character:FindFirstChild("Humanoid")
-            end
+        local isReloading = BodyEffects and BodyEffects:FindFirstChild("Reload") and BodyEffects.Reload.Value
+        if isReloading then
+            _G.rb_messageLabel.Text="reloading... (void)"
+            _G.rb_voiding=true _G.rb_teleporting=false
+            _G.rb_reloadTool()
+            if not ragebotviewactive then workspace.CurrentCamera.CameraSubject=Character:FindFirstChild("Humanoid") end
             return
         end
-        if not RB.lockedTarget or _G.rb_shouldSwitch then
-            RB.lockedTarget=nil _G.rb_shouldSwitch=false _G.rb_lockedTargetUserId=nil
-            if RB.selecttargets and #RB.targets > 0 then
-                for attempt=1,#RB.targets do
-                    _G.rb_currentTargetIndex=(_G.rb_currentTargetIndex%#RB.targets)+1
-                    local candidate = RB.targets[_G.rb_currentTargetIndex]
+        if not lockedTarget and _G.rb_lockedTargetUserId then
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr.UserId == _G.rb_lockedTargetUserId then lockedTarget = plr break end
+            end
+        end
+        if not lockedTarget or _G.rb_shouldSwitch then
+            lockedTarget=nil _G.rb_shouldSwitch=false _G.rb_lockedTargetUserId=nil
+            if selecttargets and #ragebottargets > 0 then
+                for attempt=1,#ragebottargets do
+                    _G.rb_currentTargetIndex=(_G.rb_currentTargetIndex%#ragebottargets)+1
+                    local candidate = ragebottargets[_G.rb_currentTargetIndex]
                     if candidate and candidate.Character then
                         local be  = candidate.Character:FindFirstChild("BodyEffects")
                         local hum = candidate.Character:FindFirstChild("Humanoid")
                         local gra = candidate.Character:FindFirstChild("GRABBING_CONSTRAINT")
                         if be and hum and hum.Health>0 and not gra then
                             local sd = be:FindFirstChild("SDeath") and be["SDeath"].Value
-                            if not sd then RB.lockedTarget=candidate break end
+                            if not sd then lockedTarget=candidate break end
                         end
                     end
                 end
@@ -9161,73 +9917,119 @@ do
                         if tHRP and tHum and tHum.Health>0 and be and not gra then
                             local isKO = be:FindFirstChild("K.O") and be["K.O"].Value
                             local sd   = be:FindFirstChild("SDeath") and be["SDeath"].Value
+                            if not isKO and not sd then
+                                activeKOTargets[plr.UserId] = nil
+                            end
                             if not sd then
                                 local dist = (tHRP.Position - RootPart.Position).Magnitude
                                 local eff  = isKO and (dist+10000) or dist
-                                if eff < closestDist then closestDist=eff RB.lockedTarget=plr end
+                                if eff < closestDist then closestDist=eff lockedTarget=plr end
                             end
                         end
                     end
                 end
             end
         end
-        if not RB.lockedTarget or not RB.lockedTarget.Character then
-            if RB.lockedTarget and not RB.lockedTarget:IsDescendantOf(game) then
-                _G.rb_lockedTargetUserId=nil RB.lockedTarget=nil _G.rb_shouldSwitch=true
+        if not lockedTarget or not lockedTarget.Character then
+            if lockedTarget and not lockedTarget:IsDescendantOf(game) then
+                _G.rb_lockedTargetUserId=nil lockedTarget=nil _G.rb_shouldSwitch=true
             end
+            if _G.rb_messageLabel then _G.rb_messageLabel.Text="no target... (void)" end
             _G.rb_isInCombat=false _G.rb_voiding=true _G.rb_teleporting=false
-            RB.setStatus("no target... (void)")
-            RB.voidSelf(RootPart)
-            RB.reloadTool()
-            if not kfSpectating then workspace.CurrentCamera.CameraSubject=Character:FindFirstChild("Humanoid") end
+            _G.rb_reloadTool()
+            workspace.CurrentCamera.CameraSubject=Character:FindFirstChild("Humanoid")
             return
         end
-        if RB.lockedTarget then _G.rb_lockedTargetUserId = RB.lockedTarget.UserId end
-        local TargetChar = RB.lockedTarget.Character
-        local TargetRoot  = TargetChar and TargetChar:FindFirstChild("HumanoidRootPart")
-        local UpperTorso  = TargetChar and TargetChar:FindFirstChild("UpperTorso")
-        local TargetBE    = TargetChar and TargetChar:FindFirstChild("BodyEffects")
-        local TargetHum   = TargetChar and TargetChar:FindFirstChild("Humanoid")
-        local TargetFF    = TargetChar and TargetChar:FindFirstChildOfClass("ForceField")
+        if lockedTarget then _G.rb_lockedTargetUserId = lockedTarget.UserId end
+        local TargetChar = lockedTarget.Character
+        if not TargetChar then
+            _G.rb_messageLabel.Text="killing (no stream): "..lockedTarget.Name
+            _G.rb_isInCombat=true _G.rb_voiding=false _G.rb_teleporting=true
+            if _G.rb_lockedTargetUserId then
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr.UserId==_G.rb_lockedTargetUserId and plr.Character then lockedTarget=plr break end
+                end
+            end
+            return
+        end
+        local TargetRoot  = TargetChar:FindFirstChild("HumanoidRootPart")
+        local UpperTorso  = TargetChar:FindFirstChild("UpperTorso")
+        local TargetBE    = TargetChar:FindFirstChild("BodyEffects")
+        local TargetHum   = TargetChar:FindFirstChild("Humanoid")
+        local TargetFF    = TargetChar:FindFirstChildOfClass("ForceField")
         if TargetRoot then _G.rb_lastKnownTargetPos = TargetRoot.Position end
-        if not TargetRoot or not TargetHum or TargetHum.Health<=0 then _G.rb_shouldSwitch=true _G.rb_isInCombat=false return end
+        if not TargetRoot or not TargetHum or TargetHum.Health<=0 then
+            if TargetHum and TargetHum.Health <= 0 and lockedTarget and ragebotNotificationsEnabled and not activeKOTargets[lockedTarget.UserId] then
+                activeKOTargets[lockedTarget.UserId] = true
+                killCount = killCount + 1
+                if showKillDeathNotify then
+                    showKillDeathNotify('kill', lockedTarget.Name, killCount, deathCount)
+                end
+            end
+            _G.rb_shouldSwitch=true _G.rb_isInCombat=false return
+        end
         local isKO = TargetBE and TargetBE:FindFirstChild("K.O")    and TargetBE["K.O"].Value
         local isSD = TargetBE and TargetBE:FindFirstChild("SDeath") and TargetBE["SDeath"].Value
-
         if RB.buyingWeapon then return end
-        if RB.autoBuyWeapon then
-            local weapons = Options.RbAutoBuyWeaponSelect and Options.RbAutoBuyWeaponSelect.Value
-            local wepList = {}
-            if type(weapons) == "table" then
-                for name, sel in pairs(weapons) do
-                    if type(name) == "number" and type(sel) == "string" then
-                        table.insert(wepList, sel)
-                    elseif type(name) == "string" and sel == true then
-                        table.insert(wepList, name)
-                    end
-                end
-            end
-            if #wepList > 0 then
-                for _, wn in ipairs(wepList) do
-                    if not RB.hasSpecificGun(wn) then
-                        RB.setStatus('buying weapon: ' .. wn)
-                        RB.buyGun(wn)
-                        return
-                    end
-                end
-            end
-        end
 
         if RB.buyingAmmo then return end
         if RB.autoBuyAmmo then
+            local selectedWeapons = Options.RbAutoBuyWeaponSelect and Options.RbAutoBuyWeaponSelect.Value
+            local allowedWeapons = {}
+            if type(selectedWeapons) == 'table' then
+                for name, sel in pairs(selectedWeapons) do
+                    if type(name) == 'number' and type(sel) == 'string' then
+                        table.insert(allowedWeapons, sel)
+                    elseif type(name) == 'string' and sel == true then
+                        table.insert(allowedWeapons, name)
+                    end
+                end
+            end
+            local function isToolAllowed(t)
+                local cleanTool = t.Name:lower():gsub('[%[%]%s%-]', '')
+                if #allowedWeapons > 0 then
+                    for _, wn in ipairs(allowedWeapons) do
+                        local clean = wn:lower():gsub('[%[%]%s%-]', '')
+                        if cleanTool == clean or cleanTool:find(clean, 1, true) or (#clean >= 3 and clean:find(cleanTool, 1, true)) then
+                            return true
+                        end
+                    end
+                    return false
+                end
+                if flamethrower_hack then
+                    return cleanTool:find('flame', 1, true) ~= nil
+                end
+                return true
+            end
             local emptyTool = nil
             local charTools = Character and Character:GetChildren() or {}
-            local bp        = LocalPlayer:FindFirstChild("Backpack")
+            local bp        = LocalPlayer:FindFirstChild('Backpack')
             local bpTools   = bp and bp:GetChildren() or {}
+            local function getReserveAmmo(t)
+                local df = LocalPlayer:FindFirstChild('DataFolder')
+                local inv = df and df:FindFirstChild('Inventory')
+                if inv then
+                    local ammoSlot = inv:FindFirstChild(t.Name)
+                    if ammoSlot and ammoSlot:IsA('NumberValue') then
+                        return ammoSlot.Value
+                    end
+                    local cleanName = t.Name:gsub('[%[%]%s]', '')
+                    for _, child in ipairs(inv:GetChildren()) do
+                        if child:IsA('NumberValue') and child.Name:gsub('[%[%]%s]', '') == cleanName then
+                            return child.Value
+                        end
+                    end
+                end
+                return nil
+            end
             local function isToolEmpty(t)
+                if not isToolAllowed(t) then return false end
                 if t:IsA('Tool') and t:FindFirstChild('Ammo') and t.Ammo.Value <= 0 then
                     if not _G.rb_failedAmmoBuy[t] or tick() > _G.rb_failedAmmoBuy[t] then
-                        return true
+                        local reserve = getReserveAmmo(t)
+                        if reserve == nil or reserve <= 30 then
+                            return true
+                        end
                     end
                 end
                 return false
@@ -9241,138 +10043,110 @@ do
                 end
             end
             if emptyTool then
-                local hum = Character:FindFirstChildOfClass("Humanoid")
+                local hum = Character:FindFirstChildOfClass('Humanoid')
                 if hum then pcall(function() hum:UnequipTools() end) end
                 _G.rb_voiding = true
                 _G.rb_teleporting = false
-                RB.setStatus('buying ammo: ' .. emptyTool.Name)
                 RB.buyAmmo(emptyTool)
                 return
             end
         end
-
-        if not isKO and not isSD then
-            if RB.lockedTarget then RB.killedTargets[RB.lockedTarget.UserId] = nil end
-        end
-
-        if (isKO or isSD) and RB.lockedTarget then
-            local tuid = RB.lockedTarget.UserId
-            if not RB.killedTargets[tuid] then
-                RB.killedTargets[tuid] = true
-                if RB.notificationsEnabled then
-                    RB.killCount = RB.killCount + 1
-                    Library:Notify(string.format("✦ KILL  %s  [%d / %d]", RB.lockedTarget.DisplayName or RB.lockedTarget.Name, RB.killCount, RB.deathCount), 4)
-                end
-                if RB.trashTalkAutoEnabled then
-                    if not RB.trashSent[tuid] or tick() - RB.trashSent[tuid] > 5 then
-                        RB.trashSent[tuid] = tick()
-                        task.spawn(function()
-                            task.wait(0.3)
-                            local phrase = RB.trashPhrases[math.random(1, #RB.trashPhrases)]
-                            RB.sendChat(phrase)
-                        end)
-                    end
-                end
+        if (isKO or isSD) and ragebotNotificationsEnabled and lockedTarget and not activeKOTargets[lockedTarget.UserId] then
+            activeKOTargets[lockedTarget.UserId] = true
+            killCount=killCount+1
+            if showKillDeathNotify then
+                showKillDeathNotify('kill', lockedTarget.Name, killCount, deathCount)
             end
         end
-
         if isSD then
-            _G.rb_isInCombat=false _G.rb_shouldSwitch=true RB.lockedTarget=nil
-            _G.rb_smoothedTargetPos=nil _G.rb_voiding=true _G.rb_teleporting=false
-            RB.setStatus("target dead... (switching)")
-            RB.voidSelf(RootPart)
-            RB.reloadTool()
+            _G.rb_messageLabel.Text="target dead... (switching)"
+            _G.rb_isInCombat=false _G.rb_shouldSwitch=true lockedTarget=nil
+            _G.rb_smoothedTargetPos=nil _G.rb_voiding=true _G.rb_teleporting=false _G.rb_reloadTool()
             return
         end
         if TargetFF then
-            _G.rb_isInCombat=false _G.rb_voiding=true _G.rb_teleporting=false
-            RB.setStatus("waiting FF... (void)")
-            RB.voidSelf(RootPart)
-            RB.reloadTool()
-            if RB.viewactive then workspace.CurrentCamera.CameraSubject = TargetHum or UpperTorso
-            elseif not kfSpectating then workspace.CurrentCamera.CameraSubject = Character:FindFirstChild("Humanoid") end
+            _G.rb_messageLabel.Text="waiting FF... (void)"
+            _G.rb_isInCombat=false _G.rb_voiding=true _G.rb_teleporting=false _G.rb_reloadTool()
+            if ragebotviewactive then workspace.CurrentCamera.CameraSubject=UpperTorso or TargetHum
+            else workspace.CurrentCamera.CameraSubject=Character:FindFirstChild("Humanoid") end
             return
         end
         _G.rb_isInCombat=true _G.rb_voiding=false _G.rb_teleporting=true
-        if RB.viewactive then workspace.CurrentCamera.CameraSubject = TargetHum or UpperTorso
-        elseif not kfSpectating then workspace.CurrentCamera.CameraSubject = Character:FindFirstChild("Humanoid") end
-              if isKO and UpperTorso and RB.stompactive and _G.rb_canrun then
-            _G.rb_teleporting = false
-            _G.rb_voiding = false
-            RB.setStatus("stomping: " .. (RB.lockedTarget.DisplayName or RB.lockedTarget.Name))
-            pcall(function()
-                RootPart.Velocity = Vector3.zero
-                RootPart.RotVelocity = Vector3.zero
-                RootPart.AssemblyLinearVelocity = Vector3.zero
-                RootPart.AssemblyAngularVelocity = Vector3.zero
-                RootPart.CFrame = CFrame.new(UpperTorso.Position + Vector3.new(0, 3.5, 0))
-            end)
-            _G.rbStompFrameCount = (_G.rbStompFrameCount or 0) + 1
-            if _G.rbStompFrameCount >= 2 then
-                _G.rbStompFrameCount = 0
-                pcall(function()
-                    ReplicatedStorage.MainEvent:FireServer("Stomp")
-                end)
-            end
+        if ragebotviewactive then workspace.CurrentCamera.CameraSubject=UpperTorso or TargetHum
+        else workspace.CurrentCamera.CameraSubject=Character:FindFirstChild("Humanoid") end
+        if isKO and UpperTorso and ragebotstompactive and _G.rb_canrun then
+            _G.rb_messageLabel.Text="stomping: "..lockedTarget.Name
+            _G.rb_teleporting=false _G.rb_voiding=false
+            RootPart.Velocity=Vector3.zero RootPart.RotVelocity=Vector3.zero
+            RootPart.AssemblyLinearVelocity=Vector3.zero RootPart.AssemblyAngularVelocity=Vector3.zero
+            RootPart.CFrame=CFrame.new(UpperTorso.Position+Vector3.new(0,3.5,0))
+            task.wait(0.1) MainEvent:FireServer("Stomp")
             return
         end
-
-        if not isKO then
-            RB.setStatus("killing: "..RB.lockedTarget.Name)
-        end
-
         if not isKO and _G.rb_canrun then
+            _G.rb_messageLabel.Text="killing: "..lockedTarget.Name
             local tPos = TargetRoot.Position
-
-            if TargetRoot then
-                if applyToHRP then applyToHRP(TargetRoot) end
-                if HitboxVisuals and HitboxVisuals[TargetRoot] then HitboxVisuals[TargetRoot].CFrame = TargetRoot.CFrame end
+            if tPos.Y < -30 and _G.rb_lastKnownTargetPos and _G.rb_lastKnownTargetPos.Y >= -30 then
+                tPos = _G.rb_lastKnownTargetPos
+            elseif tPos.Y < -30 then
+                tPos = Vector3.new(tPos.X, 5, tPos.Z)
             end
-
-            if not RB.flamethrower_hack then _G.rb_smoothedTargetPos=nil end
-
-            if RB.flamethrower_hack then
-                local targetHead = TargetChar:FindFirstChild("Head") or UpperTorso or TargetRoot
-                local targetHeadPos = targetHead and targetHead.Position or tPos
-                _G.rb_orbitAngle = ((_G.rb_orbitAngle or 0) + 3.5 * dt) % (2 * math.pi)
-                local ox = math.cos(_G.rb_orbitAngle) * 11
-                local oz = math.sin(_G.rb_orbitAngle) * 11
-                local flamePos = targetHeadPos + Vector3.new(ox, 3.5, oz)
-                pcall(function()
-                    RootPart.Velocity = Vector3.zero
-                    RootPart.RotVelocity = Vector3.zero
-                    RootPart.AssemblyLinearVelocity = Vector3.zero
-                    RootPart.AssemblyAngularVelocity = Vector3.zero
-                    RootPart.CFrame = CFrame.lookAt(flamePos, targetHeadPos)
-                end)
-            elseif RB.targetPositionMode and RB.targetPositionMode ~= "Default" then
-                local mode = RB.targetPositionMode
-                local spinAngle = ((_G.rb_spinAngle or 0) + dt * 45) % (2 * math.pi)
-                _G.rb_spinAngle = spinAngle
-
-                if mode == "Above Upside Down Spin" then
-                    local abovePos = tPos + Vector3.new(0, 7, 0)
-                    local spinCF = CFrame.new(abovePos) * CFrame.Angles(math.rad(180), spinAngle, 0)
-                    _G.rb_steppedMove(RootPart, spinCF)
-                elseif mode == "Above Target" then
-                    local abovePos = tPos + Vector3.new(0, 6, 0)
-                    local targetCF = CFrame.lookAt(abovePos, tPos)
-                    _G.rb_steppedMove(RootPart, targetCF)
-                elseif mode == "Under Target" then
-                    local underPos = tPos - Vector3.new(0, 6, 0)
-                    local targetCF = CFrame.lookAt(underPos, tPos)
-                    _G.rb_steppedMove(RootPart, targetCF)
+            if not flamethrower_hack then _G.rb_smoothedTargetPos=nil end
+            if flamethrower_hack then
+                local flameOrbitSpeed=2 local flameOrbitDistance=30
+                _G.rb_orbitAngle=_G.rb_orbitAngle+flameOrbitSpeed*dt
+                local ox=math.cos(_G.rb_orbitAngle)*flameOrbitDistance
+                local oz=math.sin(_G.rb_orbitAngle)*flameOrbitDistance
+                local orbitPos=tPos+Vector3.new(ox,0,oz)
+                if not ragebotactive then return end
+                RootPart.CFrame=CFrame.new(orbitPos,tPos)
+            elseif ragebotrandomtpactive then
+                if ragebotrandomrotationactive then
+                    RootPart.CFrame=CFrame.new(tPos+Vector3.new(math.random(-20,20),math.random(-20,20),math.random(-20,20)))
+                        *CFrame.Angles(math.rad(math.random(0,360)),math.rad(math.random(0,360)),math.rad(math.random(0,360)))
                 else
-                    local stablePos = tPos + Vector3.new(0, 2, 6)
-                    local targetCF = CFrame.lookAt(stablePos, tPos)
-                    _G.rb_steppedMove(RootPart, targetCF)
+                    RootPart.CFrame=CFrame.lookAt(tPos+Vector3.new(math.random(-20,20),math.random(-20,20),math.random(-20,20)),tPos)
                 end
             else
-                local stablePos = tPos + Vector3.new(0, 2, 6)
-                local targetCF = CFrame.lookAt(stablePos, tPos)
-                _G.rb_steppedMove(RootPart, targetCF)
+                RootPart.CFrame=CFrame.lookAt(tPos+Vector3.new(math.random(-20,20),math.random(-20,20),math.random(-20,20)),tPos)
             end
         end
+    end)
+
+
+
+    local function resetRagebot()
+        ragebotactive=false lockedTarget=nil _G.rb_shouldSwitch=false _G.rb_isInCombat=false
+        _G.rb_voiding=false _G.rb_teleporting=false
+        if _G.rb_messageLabel then _G.rb_messageLabel.Text="" end
+        workspace.CurrentCamera.CameraSubject=LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
+        local char = LocalPlayer.Character
+        if char then
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                if _G.rb_originalPosition then hrp.CFrame=_G.rb_originalPosition end
+                hrp.Anchored=false hrp.AssemblyLinearVelocity=Vector3.new(0,0,0) hrp.AssemblyAngularVelocity=Vector3.new(0,0,0)
+            end
+            local animate=char:FindFirstChild("Animate") if animate then animate.Disabled=false end
+            local hum=char:FindFirstChild("Humanoid") if hum then hum.AutoRotate=true end
+        end
+        _G.rb_originalPosition=nil
+        if ragebotNotificationsEnabled then killCount=0 deathCount=0 table.clear(activeKOTargets) end
+    end
+
+    Toggles.ragebotenabled:OnChanged(function()
+        ragebotenabled=Toggles.ragebotenabled.Value
+        if not ragebotenabled then resetRagebot() end
+    end)
+    Options.ragebotkeybind:OnClick(function()
+        if not ragebotenabled or UserInputService:GetFocusedTextBox() then return end
+        ragebotactive=not ragebotactive
+        if ragebotactive then
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                _G.rb_originalPosition=LocalPlayer.Character.HumanoidRootPart.CFrame
+            end
+            _G.rb_shouldSwitch=true
+        else resetRagebot() end
     end)
 end
 
@@ -10012,11 +10786,7 @@ MiscRight:AddButton({Text="Rejoin Server", Func=function()
     end
 end})
 
-MiscRight:AddButton({Text="Neckgrab", Func=function()
-    task.spawn(function()
-        loadstring(game:HttpGet('https://raw.githubusercontent.com/zesty-create/rescue/refs/heads/main/neckgrab.lua'))()
-    end)
-end})
+
 
 MiscRight:AddButton({Text="Discord", Func=function()
     if setclipboard then
@@ -10160,6 +10930,23 @@ Toggles.AntiRPG:OnChanged(function()
         end
     end
 end)
+
+local autoStompConn = nil
+MiscGroup:AddToggle('EnableAutoStomp', {
+    Text = 'Auto Stomp',
+    Default = false,
+    Callback = function(v)
+        if autoStompConn then autoStompConn:Disconnect() autoStompConn = nil end
+        if v then
+            autoStompConn = RunService.Heartbeat:Connect(function()
+                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+                    local mainEvent = ReplicatedStorage:FindFirstChild("MainEvent")
+                    if mainEvent then mainEvent:FireServer("Stomp") end
+                end
+            end)
+        end
+    end
+})
 
 MiscGroup:AddToggle("EnableAntiStomp", {Text="Anti Stomp", Default=false})
 Toggles.EnableAntiStomp:OnChanged(function() MiscSettings.AntiStompEnabled = Toggles.EnableAntiStomp.Value end)
@@ -10374,6 +11161,251 @@ LocalPlayer.CharacterAdded:Connect(function(char)
         if hrp then hrp.CFrame = lastDeathPos end
     end
 end)
+end
+
+do
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    getgenv().SKIDO_GodMode = false
+
+    local function runGodModeGlitch()
+        if not getgenv().SKIDO_GodMode then return end
+
+        task.spawn(function()
+            local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+            local hrp = char:WaitForChild("HumanoidRootPart")
+
+            local returnCF = CFrame.new(561, 143, 176)
+
+            local vehicleSpawner = workspace:FindFirstChild("VehicleSpawner")
+            if vehicleSpawner then
+                local signPart = vehicleSpawner:FindFirstChild("Sign", true)
+                    and vehicleSpawner.Sign:FindFirstChild("Part", true)
+
+                if signPart then
+                    hrp.CFrame = signPart.CFrame + Vector3.new(0, 3, 0)
+                end
+            end
+
+            task.wait(0.2)
+
+            if vehicleSpawner then
+                local prompt = vehicleSpawner:FindFirstChild("Sign", true)
+                    and vehicleSpawner.Sign:FindFirstChild("Part", true)
+                    and vehicleSpawner.Sign.Part:FindFirstChild("ProximityPrompt")
+
+                if prompt and fireproximityprompt then
+                    fireproximityprompt(prompt)
+                end
+            end
+
+            task.wait(0.4)
+            local vehicles = workspace:FindFirstChild("Vehicles")
+            local targetVehicle
+
+            if vehicles then
+                local startT = tick()
+                while tick() - startT < 0.1 and getgenv().SKIDO_GodMode do
+                    for _, v in ipairs(vehicles:GetChildren()) do
+                        if v.Name == LocalPlayer.Name or v:GetAttribute("VehicleOwner") == true or v:GetAttribute("Owner") == LocalPlayer.Name then
+                            targetVehicle = v
+                            break
+                        end
+                    end
+                    if targetVehicle then break end
+                    task.wait(0.05)
+                end
+
+                if not targetVehicle and getgenv().SKIDO_GodMode then
+                    local closestDist = math.huge
+                    for _, v in ipairs(vehicles:GetChildren()) do
+                        local ride = v:FindFirstChild("Ride")
+                        if ride and ride:IsA("ProximityPrompt") then
+                            local pos = (v:IsA("Model") and v:GetPivot().Position) or (v:IsA("BasePart") and v.Position)
+                            if pos then
+                                local dist = (pos - hrp.Position).Magnitude
+                                if dist < closestDist then
+                                    targetVehicle = v
+                                    closestDist = dist
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if targetVehicle and getgenv().SKIDO_GodMode then
+                    local ridePrompt = targetVehicle:FindFirstChild("Ride")
+                    if ridePrompt and ridePrompt:IsA("ProximityPrompt") then
+                        if targetVehicle:IsA("BasePart") then
+                            hrp.CFrame = targetVehicle.CFrame + Vector3.new(0, 2, 0)
+                        elseif targetVehicle:IsA("Model") then
+                            local basePart = targetVehicle.PrimaryPart or targetVehicle:FindFirstChildWhichIsA("BasePart")
+                            if basePart then
+                                hrp.CFrame = basePart.CFrame + Vector3.new(0, 2, 0)
+                            end
+                        end
+                        task.wait(0.15)
+                        if fireproximityprompt then fireproximityprompt(ridePrompt) end
+                    end
+                end
+            end
+
+            task.wait(0.2)
+
+            if targetVehicle and getgenv().SKIDO_GodMode then
+                task.spawn(function()
+                    for _ = 1, 10 do
+                        if targetVehicle and targetVehicle.Parent and getgenv().SKIDO_GodMode then
+                            if targetVehicle:IsA("Model") then
+                                local prim = targetVehicle.PrimaryPart or targetVehicle:FindFirstChildWhichIsA("BasePart")
+                                if prim then
+                                    targetVehicle:PivotTo(targetVehicle:GetPivot() + prim.CFrame.LookVector * 1.5)
+                                end
+                            elseif targetVehicle:IsA("BasePart") then
+                                targetVehicle.CFrame = targetVehicle.CFrame + targetVehicle.CFrame.LookVector * 1.5
+                            end
+                        end
+                        task.wait(0.05)
+                    end
+                end)
+            end
+
+            local function getVehicleModel(hum)
+                if hum and hum.SeatPart then
+                    local sp = hum.SeatPart
+                    return sp.Parent ~= workspace and sp.Parent or sp
+                end
+                return targetVehicle
+            end
+
+            task.wait(0.5)
+            if not getgenv().SKIDO_GodMode then return end
+
+            local currentChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+            local hum = currentChar:WaitForChild("Humanoid")
+            local root = currentChar:WaitForChild("HumanoidRootPart")
+            local seatModel = getVehicleModel(hum)
+
+            local waypoints = {
+                Vector3.new(100000, 100000, 100000),
+                Vector3.new(200000, 200000, 200000),
+                Vector3.new(1500000, 1500000, 1500000),
+                Vector3.new(4000000, 4000000, 4000000),
+                Vector3.new(6500000, 6500000, 6500000),
+                Vector3.new(9000000, 9000000, 9000000),
+                Vector3.new(5000000, 5000000, 5000000),
+                Vector3.new(18000000, 18000000, 18000000),
+            }
+
+            local function moveEntity(cf)
+                local entity = getVehicleModel(hum) or seatModel
+                if entity and entity:IsA("Model") then
+                    entity:PivotTo(cf)
+                elseif entity and entity:IsA("BasePart") then
+                    entity.CFrame = cf
+                elseif root then
+                    root.CFrame = cf
+                end
+            end
+
+            local currentPos = root.Position
+
+            for _, wp in ipairs(waypoints) do
+                if not getgenv().SKIDO_GodMode then break end
+                for step = 1, 25 do
+                    moveEntity(CFrame.new(currentPos:Lerp(wp, step / 25)))
+                    task.wait(0.005)
+                end
+                currentPos = wp
+            end
+
+            if getgenv().SKIDO_GodMode then
+                local voidPos = Vector3.new(18812581888888, 1e+29, 998235235621111)
+                for step = 1, 15 do
+                    moveEntity(CFrame.new(currentPos:Lerp(voidPos, (step / 15) ^ 2)))
+                    task.wait(0.03)
+                end
+
+                hum.Jump = true
+                if VirtualInputManager then
+                    pcall(function()
+                        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+                        task.wait(0.05)
+                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+                    end)
+                end
+
+                task.wait(0.1)
+                moveEntity(CFrame.new(voidPos))
+                task.wait(5)
+
+                local newChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+                local newHrp = newChar:WaitForChild("HumanoidRootPart")
+                local newSeatModel = getVehicleModel(newChar:FindFirstChildOfClass("Humanoid")) or seatModel
+
+                newHrp.Anchored = true
+                newHrp.AssemblyLinearVelocity = Vector3.zero
+                newHrp.AssemblyAngularVelocity = Vector3.zero
+                newHrp.CFrame = returnCF
+
+                if newSeatModel then
+                    if newSeatModel:IsA("Model") then
+                        for _, p in ipairs(newSeatModel:GetDescendants()) do
+                            if p:IsA("BasePart") then
+                                p.Anchored = true
+                                p.AssemblyLinearVelocity = Vector3.zero
+                                p.AssemblyAngularVelocity = Vector3.zero
+                            end
+                        end
+                        newSeatModel:PivotTo(returnCF)
+                    elseif newSeatModel:IsA("BasePart") then
+                        newSeatModel.Anchored = true
+                        newSeatModel.AssemblyLinearVelocity = Vector3.zero
+                        newSeatModel.AssemblyAngularVelocity = Vector3.zero
+                        newSeatModel.CFrame = returnCF
+                    end
+                end
+
+                task.wait(0.15)
+                newHrp.Anchored = false
+
+                if newSeatModel then
+                    if newSeatModel:IsA("Model") then
+                        for _, p in ipairs(newSeatModel:GetDescendants()) do
+                            if p:IsA("BasePart") then
+                                p.Anchored = false
+                            end
+                        end
+                    elseif newSeatModel:IsA("BasePart") then
+                        newSeatModel.Anchored = false
+                    end
+                end
+            end
+        end)
+    end
+
+    MiscGroup:AddToggle("GodModeToggle", {Text = "God Mode", Default = false})
+    Toggles.GodModeToggle:OnChanged(function()
+        getgenv().SKIDO_GodMode = Toggles.GodModeToggle.Value
+
+        if getgenv().SKIDO_RespawnConnection then
+            getgenv().SKIDO_RespawnConnection:Disconnect()
+            getgenv().SKIDO_RespawnConnection = nil
+        end
+
+        if Toggles.GodModeToggle.Value then
+            Library:Notify("God Mode Enabled", 2)
+            runGodModeGlitch()
+
+            getgenv().SKIDO_RespawnConnection = LocalPlayer.CharacterAdded:Connect(function()
+                if getgenv().SKIDO_GodMode then
+                    task.wait(1.5)
+                    runGodModeGlitch()
+                end
+            end)
+        else
+            Library:Notify("God Mode Disabled", 1.5)
+        end
+    end)
 end
 
 MiscGroup:AddToggle("NoJumpCooldown", {Text="No Jump Cooldown", Default=false})
@@ -10885,6 +11917,20 @@ task.spawn(function()
             currentSound.Volume = musicVolumeVal / 10
         end
     end)
+
+    Options.MusicVolumeSlider:OnChanged(function()
+        local val = Options.MusicVolumeSlider.Value
+        if type(val) ~= "number" then val = tonumber(val) or 5 end
+        musicVolumeVal = val
+        local vol = math.clamp(val / 10, 0, 1)
+        if currentSound then
+            pcall(function() currentSound.Volume = vol end)
+        end
+        pcall(function()
+            local ss = game:GetService("SoundService")
+            ss.MusicVolume = vol
+        end)
+    end)
 end)
 
 task.spawn(function()
@@ -11114,14 +12160,53 @@ task.spawn(function()
 
     local function getSelectedTarget()
         local rawVal = Options.TargetPlayerDropdown and Options.TargetPlayerDropdown.Value
-        if not rawVal or rawVal == "No Players" or rawVal == "" then return nil end
-        local uname = rawVal:match("@([^%s%)]+)")
-        if uname then
-            local p = Players:FindFirstChild(uname)
-            if p then return p end
+        if type(rawVal) == "table" then
+            for k, v in pairs(rawVal) do
+                if type(v) == "string" and v ~= "" and v ~= "No Players" then
+                    rawVal = v
+                    break
+                elseif type(k) == "string" and v == true and k ~= "" and k ~= "No Players" then
+                    rawVal = k
+                    break
+                end
+            end
         end
-        local cleanName = rawVal:split(" (@")[1] or rawVal
-        return Players:FindFirstChild(cleanName) or Players:FindFirstChild(rawVal)
+        if type(rawVal) == "number" and Options.TargetPlayerDropdown and Options.TargetPlayerDropdown.Values then
+            rawVal = Options.TargetPlayerDropdown.Values[rawVal]
+        end
+        if type(rawVal) == "string" and rawVal ~= "" and rawVal ~= "No Players" then
+            local uname = rawVal:match("@([^%s%)]+)")
+            if uname then
+                local p = Players:FindFirstChild(uname)
+                if p and p:IsA("Player") then return p end
+            end
+            local cleanName = rawVal:split(" (@")[1] or rawVal
+            local p = Players:FindFirstChild(cleanName) or Players:FindFirstChild(rawVal)
+            if p and p:IsA("Player") then return p end
+        end
+
+        local TLD = _G.TargetLockDot
+        if TLD and TLD.lockedPlr and TLD.lockedPlr:IsA("Player") then
+            return TLD.lockedPlr
+        end
+
+        local rb = _G.RB
+        if rb and rb.lockedTarget and rb.lockedTarget:IsA("Player") then
+            return rb.lockedTarget
+        end
+
+        if getgenv().manual_ragebot_target and getgenv().manual_ragebot_target:IsA("Player") then
+            return getgenv().manual_ragebot_target
+        end
+
+        if _G.Target and typeof(_G.Target) == "Instance" and _G.Target:IsA("Player") then
+            return _G.Target
+        end
+        if getgenv().Target and typeof(getgenv().Target) == "Instance" and getgenv().Target:IsA("Player") then
+            return getgenv().Target
+        end
+
+        return nil
     end
 
     local function formatMoney(val)
@@ -11539,7 +12624,7 @@ task.spawn(function()
         SyncToggleState = false
     })
 
-    TargetRightGroup:AddToggle('TargetView', {Text = 'View Target', Default = false})
+
 
     local activeFlingRunning = false
     local broughtKOCharacters = {}
