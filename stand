@@ -84,6 +84,11 @@ local ragebottargets = {}
 local currentTargetIndex = 1
 local fakepositionconnection = nil
 local automaskenabled = false
+local autoarmorenabled = false
+local autosaveenabled  = false
+local asaveOwner        = nil
+local lflingonly       = false
+local danceenabled     = false
 local trashtalkactive = true
 local fpactive = false
 local refreshingfakeposition = false
@@ -220,13 +225,49 @@ end
 function unequipMask()
     local char = Player.Character
     if not char then return end
+    local backpack = Player:FindFirstChild("Backpack")
     local mask = char:FindFirstChild("[Mask]") or char:FindFirstChild("Mask")
     if mask then
         pcall(function()
             if mask:IsA("Tool") then char.Humanoid:UnequipTool(mask) end
         end)
+        task.wait(0.1)
+        
+        local maskInChar = char:FindFirstChild("[Mask]") or char:FindFirstChild("Mask")
+        if maskInChar and backpack then
+            maskInChar.Parent = backpack
+        end
     end
     task.wait(0.2)
+end
+
+function buyArmorFunc()
+    local char = Player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local shopFolder = workspace:FindFirstChild("Ignored") and workspace.Ignored:FindFirstChild("Shop")
+    if not shopFolder then return end
+    local armorShop = nil
+    for _, item in pairs(shopFolder:GetChildren()) do
+        if item.Name:lower():find("armor") and not item.Name:lower():find("fire") then
+            armorShop = item; break
+        end
+    end
+    if not armorShop then return end
+    local headPart = armorShop:FindFirstChild("Head") or armorShop:FindFirstChildOfClass("BasePart")
+    if not headPart then return end
+    local cd = armorShop:FindFirstChild("ClickDetector")
+    if not cd then
+        for _, v in pairs(armorShop:GetDescendants()) do
+            if v:IsA("ClickDetector") then cd = v; break end
+        end
+    end
+    if not cd then return end
+    local origCF = hrp.CFrame
+    hrp.CFrame = CFrame.new(headPart.Position + Vector3.new(0, -8, 0))
+    task.wait(0.1); fireclickdetector(cd); task.wait(0.4)
+    if hrp and origCF then hrp.CFrame = origCF end
 end
 
 function buyMaskLikeGun()
@@ -571,6 +612,7 @@ local EMOTES = {
 
 local currentTrack  = nil
 local emoteLoopTask = nil
+local danceSpeed    = 1
 
 function playAnimation(animId)
     if not character then return end
@@ -581,13 +623,14 @@ function playAnimation(animId)
     animation.AnimationId = animId
     local track = animator:LoadAnimation(animation)
     track.Looped = true; track.Priority = Enum.AnimationPriority.Action4; track:Play()
+    track:AdjustSpeed(danceSpeed)
     currentTrack = track
 end
 
 function startEmoteLoop()
     if emoteLoopTask then task.cancel(emoteLoopTask); emoteLoopTask = nil end
     emoteLoopTask = task.spawn(function()
-        while character and character.Parent do
+        while character and character.Parent and danceenabled do
             local emoteIds = {}
             for _, animId in pairs(EMOTES) do table.insert(emoteIds, animId) end
             playAnimation(emoteIds[math.random(1, #emoteIds)])
@@ -834,13 +877,45 @@ function setupChatListener(player)
             elseif msgLower == "!abuse off" then AbuseProtection = false
             elseif msgLower == "!mask on" then
                 automaskenabled = true
-                print("[KraviX] 🎭 Mask ativada! Comprando...")
             elseif msgLower == "!mask off" then
                 automaskenabled = false
                 print("[KraviX] 🎭 Mask desativada!")
+            elseif msgLower == "!autoarmor on" then autoarmorenabled = true
+            elseif msgLower == "!autoarmor off" then autoarmorenabled = false
+            elseif msgLower == "!asave on" then
+                autosaveenabled = true
+                asaveOwner = player
+            elseif msgLower == "!asave off" then
+                autosaveenabled = false
+                asaveOwner = nil
+            elseif msgLower == "!dance on" then
+                danceenabled = true
+                if character then startEmoteLoop() end
+            elseif msgLower == "!dance off" then
+                danceenabled = false
+                if emoteLoopTask then task.cancel(emoteLoopTask); emoteLoopTask = nil end
+                if currentTrack then currentTrack:Stop(); currentTrack = nil end
+            elseif msgLower:match("^%!lfling%s+([^%s]+)$") then
+                local inputName = msgLower:match("^%!lfling%s+([^%s]+)$")
+                for _, t in pairs(Players:GetPlayers()) do
+                    if t.Name:lower():find(inputName,1,true) or t.DisplayName:lower():find(inputName,1,true) then
+                        if isProtected(t) then sendMessage("Cannot target user "..t.Name.." because they are protected."); return end
+                        lockedTarget = t; lflingonly = true; flingonly = false
+                        stomponly = false; bringonly = false; takeonly = false
+                        getgenv().downonly = false; opkill = false; voiding = false
+                        waitingFF = false; break
+                    end
+                end
+            elseif msgLower == "!lfling off" then lflingonly = false; voiding = true
             elseif EMOTES[msgLower] then playAnimation(EMOTES[msgLower])
             elseif msgLower == "!stop" then
                 if currentTrack then currentTrack:Stop(); currentTrack = nil end
+            elseif msgLower:match("^%!dancespeed%s+(%d+)$") then
+                local spd = tonumber(msgLower:match("^%!dancespeed%s+(%d+)$"))
+                if spd and spd >= 1 and spd <= 5 then
+                    danceSpeed = spd
+                    if currentTrack then currentTrack:AdjustSpeed(danceSpeed) end
+                end
             elseif msgLower == "!fp on" then
                 setfflag("NextGenReplicatorEnabledWrite4","true"); task.wait(0.1)
                 replicatesignal(game.Players.LocalPlayer.Kill)
@@ -1055,10 +1130,10 @@ task.spawn(function()
             if targetCharacter then
                 local bodyEffects = targetCharacter:FindFirstChild("BodyEffects")
                 local isKO = bodyEffects and bodyEffects:FindFirstChild("K.O") and bodyEffects["K.O"].Value
-                if isKO and trashtalkactive then
+                if isKO and trashtalkactive then 
                     if not hasSentKOMessage then
-                        sendMessage("KX/nQRGAyhD7X")
-                        sendMessage("Get KraviX")
+                        sendMessage("/KraviX")
+                        sendMessage("Get KraviX Stand Now")
                         sendMessage("KraviX killed you hahahaha")
                         hasSentKOMessage = true
                     end
@@ -1415,6 +1490,87 @@ end)
 
 task.spawn(function()
     while true do
+        if lflingonly and lockedTarget and not (buyingInProgress or buyingGunInProgress or buyingMaskInProgress) then
+            local char_ = Player.Character
+            local targetHRP = lockedTarget.Character and lockedTarget.Character:FindFirstChild("HumanoidRootPart")
+            if char_ and char_:FindFirstChild("HumanoidRootPart") and targetHRP then
+                voiding = false
+                char_.HumanoidRootPart.CFrame = CFrame.new(targetHRP.Position + Vector3.new(math.random(-5,5), 0, math.random(-5,5)))
+                char_.HumanoidRootPart.Velocity = Vector3.new(math.random(-500,500), math.random(200,600), math.random(-500,500))
+            end
+        end
+        task.wait(0.05)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if autoarmorenabled then
+            local char = Player.Character
+            if not char then continue end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not hum or hum.Health <= 0 then continue end
+            local bodyEffects = char:FindFirstChild("BodyEffects")
+            if not bodyEffects then continue end
+            local armorVal = bodyEffects:FindFirstChild("Armor")
+            if armorVal and armorVal.Value < 65 then
+                buyArmorFunc()
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if autosaveenabled and not (buyingInProgress or buyingGunInProgress or buyingMaskInProgress) then
+            local ownerPlayer = asaveOwner or Players:FindFirstChild(Owner)
+            local ownerChar   = ownerPlayer and ownerPlayer.Character
+            local standChar   = LocalPlayer.Character
+            local standHRP    = standChar and standChar:FindFirstChild("HumanoidRootPart")
+
+            if ownerChar and standHRP then
+                local bodyEffects = ownerChar:FindFirstChild("BodyEffects")
+                local isKO        = bodyEffects and bodyEffects:FindFirstChild("K.O") and bodyEffects["K.O"].Value
+                local upperTorso  = ownerChar:FindFirstChild("UpperTorso") or ownerChar:FindFirstChild("HumanoidRootPart")
+
+                if isKO and upperTorso then
+                    local safePos = Vector3.new(48, 66, 384)
+                    local distToSafe = (upperTorso.Position - safePos).Magnitude
+                    if distToSafe > 20 then
+                        local isGrabbed = ownerChar:FindFirstChild("GRABBING_CONSTRAINT") or standChar:FindFirstChild("GRABBING_CONSTRAINT")
+
+                        if not isGrabbed then
+                            voiding = false
+                            standHRP.Velocity = Vector3.zero
+                            standHRP.RotVelocity = Vector3.zero
+                            standHRP.AssemblyLinearVelocity = Vector3.zero
+                            standHRP.AssemblyAngularVelocity = Vector3.zero
+                            standHRP.CFrame = CFrame.new(upperTorso.Position + Vector3.new(0, 3.5, 0))
+                            ReplicatedStorage.MainEvent:FireServer("Grabbing", false)
+                            task.wait(0.25)
+                        else
+                            standHRP.Velocity = Vector3.zero
+                            standHRP.RotVelocity = Vector3.zero
+                            standHRP.AssemblyLinearVelocity = Vector3.zero
+                            standHRP.AssemblyAngularVelocity = Vector3.zero
+                            standHRP.CFrame = CFrame.new(safePos)
+                            task.wait(0.3)
+                            ReplicatedStorage.MainEvent:FireServer("Grabbing", false)
+                            task.wait(0.3)
+                            voiding = true
+                            task.wait(1.5)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
         if killall and not (buyingInProgress or buyingGunInProgress or buyingMaskInProgress) then
             local switchTarget = false
             if lockedTarget and lockedTarget.Character then
@@ -1606,12 +1762,9 @@ task.spawn(function()
 
         if automaskenabled and not hasMask() then
             buyingMaskInProgress = true
-            print("[KraviX] 🎭 Comprando MASK...")
             local maskBought = buyMaskLikeGun()
             if maskBought then
-                print("[KraviX] ✅ MASK comprada! Equipando...")
                 equipMask(); task.wait(0.5)
-                print("[KraviX] 🤐 Soltando MASK da mão...")
                 unequipMask(); task.wait(0.5)
             end
             buyingMaskInProgress = false
