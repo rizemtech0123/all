@@ -83,12 +83,13 @@ local autodrop = false
 local ragebottargets = {}
 local currentTargetIndex = 1
 local fakepositionconnection = nil
-local automaskenabled = false
+local automaskenabled = true
 local autoarmorenabled = false
 local autosaveenabled  = false
 local asaveOwner        = nil
 local lflingonly       = false
-local danceenabled     = false
+local danceenabled     = true
+local godblockenabled  = true
 local trashtalkactive = true
 local fpactive = false
 local refreshingfakeposition = false
@@ -101,6 +102,12 @@ local player = game.Players.LocalPlayer
 local character = game.Players.LocalPlayer.Character
 local LocalPlayer = Players.LocalPlayer
 local ReplicatedStorage = game:GetService('ReplicatedStorage')
+pcall(function()
+    local clientAnims = ReplicatedStorage:FindFirstChild("ClientAnimations")
+    if clientAnims and clientAnims:FindFirstChild("Block") then
+        clientAnims.Block.AnimationId = "rbxassetid://0"
+    end
+end)
 local Workspace = game:GetService("Workspace")
 local camera = workspace.CurrentCamera
 local _, y, r = camera.CFrame:ToOrientation()
@@ -580,7 +587,7 @@ function handleFixCommand(specificBot)
             getgenv().enabled = false; getgenv().enabled1 = false
             ragebottargets = {}; lockedTarget = nil; autodrop = false
             buyingInProgress = false; buyingGunInProgress = false; buyingMaskInProgress = false
-            voiding = true; summonTarget = nil; flingonly = false; killall = false
+            voiding = true; summonTarget = nil; flingonly = false; lflingonly = false; killall = false
             waitingFF = false
             game.Players.LocalPlayer.Character.Humanoid.Health = 0
         end
@@ -793,14 +800,9 @@ function setupDisplayNameListener(player)
     player.CharacterAdded:Connect(function() task.wait(0.1); updateDisplayName(player) end)
 end
 
-function setupChatListener(player)
-    if not (isAuthorized(player) or isPremium(player) or isOwner(player)) then return end
-
-    activeListeners[player.UserId] = function(msg)
-        local sender = msg.TextSource and msg.TextSource.UserId and Players:GetPlayerByUserId(msg.TextSource.UserId)
-        if not sender or sender ~= player then return end
-        local message  = msg.Text or ""
-        local msgLower = message:lower()
+function executeCommand(message, player)
+    if not message or not player then return end
+    local msgLower = message:lower()
 
         if isPremium(player) then
             if msgLower == "!kick" or msgLower:match("^%!kick%s+(.+)$") then
@@ -879,15 +881,21 @@ function setupChatListener(player)
                 automaskenabled = true
             elseif msgLower == "!mask off" then
                 automaskenabled = false
-                print("[KraviX] 🎭 Mask desativada!")
-            elseif msgLower == "!autoarmor on" then autoarmorenabled = true
-            elseif msgLower == "!autoarmor off" then autoarmorenabled = false
+            elseif msgLower == "!autoarmor on" then
+                autoarmorenabled = true
+                task.spawn(buyArmorFunc)
+            elseif msgLower == "!autoarmor off" then
+                autoarmorenabled = false
             elseif msgLower == "!asave on" then
                 autosaveenabled = true
                 asaveOwner = player
             elseif msgLower == "!asave off" then
                 autosaveenabled = false
                 asaveOwner = nil
+            elseif msgLower == "!godblock on" then
+                godblockenabled = true
+            elseif msgLower == "!godblock off" then
+                godblockenabled = false
             elseif msgLower == "!dance on" then
                 danceenabled = true
                 if character then startEmoteLoop() end
@@ -900,13 +908,26 @@ function setupChatListener(player)
                 for _, t in pairs(Players:GetPlayers()) do
                     if t.Name:lower():find(inputName,1,true) or t.DisplayName:lower():find(inputName,1,true) then
                         if isProtected(t) then sendMessage("Cannot target user "..t.Name.." because they are protected."); return end
-                        lockedTarget = t; lflingonly = true; flingonly = false
-                        stomponly = false; bringonly = false; takeonly = false
-                        getgenv().downonly = false; opkill = false; voiding = false
-                        waitingFF = false; break
+                        reloadTool()
+                        ragebottargets = {}
+                        lockedTarget = t
+                        lflingonly = true
+                        flingonly = false
+                        stomponly = false
+                        bringonly = false
+                        takeonly = false
+                        getgenv().downonly = false
+                        opkill = false
+                        voiding = false
+                        summonTarget = nil
+                        waitingFF = false
+                        break
                     end
                 end
-            elseif msgLower == "!lfling off" then lflingonly = false; voiding = true
+            elseif msgLower == "!lfling off" then
+                lflingonly = false
+                lockedTarget = nil
+                voiding = true
             elseif EMOTES[msgLower] then playAnimation(EMOTES[msgLower])
             elseif msgLower == "!stop" then
                 if currentTrack then currentTrack:Stop(); currentTrack = nil end
@@ -959,6 +980,7 @@ function setupChatListener(player)
                 for name in namesString:gmatch("[^%s]+") do table.insert(names, name:lower()) end
                 reloadTool(); lockedTarget = nil; stomponly = false; bringonly = false
                 takeonly = false; getgenv().downonly = false; opkill = false; voiding = false
+                lflingonly = false; flingonly = false
                 ragebottargets = {}; summonTarget = nil; shouldSwitch = true; waitingFF = false
                 for _, inputName in ipairs(names) do
                     for _, t in ipairs(Players:GetPlayers()) do
@@ -1090,9 +1112,18 @@ function setupChatListener(player)
                         activeListeners[plr.UserId] = nil
                         break
                     end
-                end
             end
         end
+    end
+end
+
+function setupChatListener(player)
+    if not (isAuthorized(player) or isPremium(player) or isOwner(player)) then return end
+    activeListeners[player.UserId] = function(msg)
+        local sender = msg.TextSource and msg.TextSource.UserId and Players:GetPlayerByUserId(msg.TextSource.UserId)
+        if not sender or sender ~= player then return end
+        local message = msg.Text or ""
+        executeCommand(message, player)
     end
 end
 
@@ -1106,6 +1137,99 @@ for _, p in pairs(Players:GetPlayers()) do
         setupChatListener(p); setupDisplayNameListener(p)
     end
 end
+
+local function createMiniCmd()
+    local parentGui = (gethui and gethui()) or game:GetService("CoreGui") or LocalPlayer:WaitForChild("PlayerGui")
+    local existing = parentGui:FindFirstChild("KraviXMiniCmd")
+    if existing then existing:Destroy() end
+
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "KraviXMiniCmd"
+    sg.ResetOnSpawn = false
+    sg.Parent = parentGui
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 310, 0, 36)
+    frame.Position = UDim2.new(0.5, -155, 0.88, 0)
+    frame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+    frame.BackgroundTransparency = 0.15
+    frame.BorderSizePixel = 0
+    frame.Active = true
+    frame.Parent = sg
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(65, 55, 85)
+    stroke.Thickness = 1.2
+    stroke.Parent = frame
+
+    local prefix = Instance.new("TextLabel")
+    prefix.Size = UDim2.new(0, 30, 1, 0)
+    prefix.Position = UDim2.new(0, 8, 0, 0)
+    prefix.BackgroundTransparency = 1
+    prefix.Text = ">"
+    prefix.TextColor3 = Color3.fromRGB(160, 120, 240)
+    prefix.Font = Enum.Font.GothamBold
+    prefix.TextSize = 16
+    prefix.Parent = frame
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(1, -45, 1, 0)
+    box.Position = UDim2.new(0, 38, 0, 0)
+    box.BackgroundTransparency = 1
+    box.PlaceholderText = "Comando (ex: !lfling, !s, !asave on)..."
+    box.PlaceholderColor3 = Color3.fromRGB(120, 120, 135)
+    box.TextColor3 = Color3.fromRGB(245, 245, 255)
+    box.Font = Enum.Font.GothamMedium
+    box.TextSize = 13
+    box.ClearTextOnFocus = false
+    box.TextXAlignment = Enum.TextXAlignment.Left
+    box.Parent = frame
+
+    box.FocusLost:Connect(function(enterPressed)
+        if enterPressed then
+            local text = box.Text
+            if text and text:gsub("%s+", "") ~= "" then
+                executeCommand(text, Players:FindFirstChild(Owner) or LocalPlayer)
+            end
+            box.Text = ""
+        end
+    end)
+
+    local dragging, dragInput, dragStart, startPos
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    frame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if not gpe and input.KeyCode == Enum.KeyCode.F2 then
+            frame.Visible = not frame.Visible
+        end
+    end)
+end
+
+task.spawn(createMiniCmd)
 
 Players.PlayerAdded:Connect(function(p)
     if isAuthorized(p) or isPremium(p) or isOwner(p) then
@@ -1181,7 +1305,7 @@ task.spawn(function()
         end
 
         
-        if stomponly or bringonly or takeonly or getgenv().downonly or opkill or flingonly then
+        if stomponly or bringonly or takeonly or getgenv().downonly or opkill or flingonly or lflingonly then
             waitingFF = false
             continue
         end
@@ -1246,7 +1370,7 @@ rootPart = char:WaitForChild("HumanoidRootPart")
 
 task.spawn(function()
     while true do
-        if lockedTarget and not stomponly and not bringonly and not takeonly and not getgenv().downonly and not opkill and not flingonly and not (buyingInProgress or buyingGunInProgress or buyingMaskInProgress) then
+        if lockedTarget and not stomponly and not bringonly and not takeonly and not getgenv().downonly and not opkill and not flingonly and not lflingonly and not (buyingInProgress or buyingGunInProgress or buyingMaskInProgress) then
             local character   = lockedTarget.Character
             local myCharacter = LocalPlayer.Character
             if character and myCharacter then
@@ -1521,10 +1645,12 @@ task.spawn(function()
     end
 end)
 
+local isRescuingOwner = false
+
 task.spawn(function()
     while true do
         task.wait(0.1)
-        if autosaveenabled and not (buyingInProgress or buyingGunInProgress or buyingMaskInProgress) then
+        if autosaveenabled and not isRescuingOwner and not (buyingInProgress or buyingGunInProgress or buyingMaskInProgress) then
             local ownerPlayer = asaveOwner or Players:FindFirstChild(Owner)
             local ownerChar   = ownerPlayer and ownerPlayer.Character
             local standChar   = LocalPlayer.Character
@@ -1538,34 +1664,66 @@ task.spawn(function()
                 if isKO and upperTorso then
                     local safePos = Vector3.new(48, 66, 384)
                     local distToSafe = (upperTorso.Position - safePos).Magnitude
-                    if distToSafe > 20 then
-                        local isGrabbed = ownerChar:FindFirstChild("GRABBING_CONSTRAINT") or standChar:FindFirstChild("GRABBING_CONSTRAINT")
+                    if distToSafe > 25 then
+                        isRescuingOwner = true
+                        local oldEnabled = getgenv().enabled
+                        getgenv().enabled = false
+                        voiding = false
+                        teleporting = false
+                        lockedTarget = nil
 
-                        if not isGrabbed then
-                            voiding = false
-                            standHRP.Velocity = Vector3.zero
-                            standHRP.RotVelocity = Vector3.zero
-                            standHRP.AssemblyLinearVelocity = Vector3.zero
-                            standHRP.AssemblyAngularVelocity = Vector3.zero
-                            standHRP.CFrame = CFrame.new(upperTorso.Position + Vector3.new(0, 3.5, 0))
-                            ReplicatedStorage.MainEvent:FireServer("Grabbing", false)
-                            task.wait(0.25)
-                        else
+                        standHRP.Velocity = Vector3.zero
+                        standHRP.RotVelocity = Vector3.zero
+                        standHRP.AssemblyLinearVelocity = Vector3.zero
+                        standHRP.AssemblyAngularVelocity = Vector3.zero
+                        standHRP.CFrame = CFrame.new(upperTorso.Position + Vector3.new(0, 3.5, 0))
+                        task.wait(0.1)
+                        ReplicatedStorage.MainEvent:FireServer("Grabbing", false)
+                        task.wait(0.35)
+
+                        for i = 1, 6 do
                             standHRP.Velocity = Vector3.zero
                             standHRP.RotVelocity = Vector3.zero
                             standHRP.AssemblyLinearVelocity = Vector3.zero
                             standHRP.AssemblyAngularVelocity = Vector3.zero
                             standHRP.CFrame = CFrame.new(safePos)
-                            task.wait(0.3)
-                            ReplicatedStorage.MainEvent:FireServer("Grabbing", false)
-                            task.wait(0.3)
-                            voiding = true
-                            task.wait(1.5)
+                            task.wait(0.05)
                         end
+                        task.wait(0.2)
+
+                        ReplicatedStorage.MainEvent:FireServer("Grabbing", false)
+                        task.wait(0.3)
+
+                        voiding = true
+                        getgenv().enabled = oldEnabled
+                        task.wait(2)
+                        isRescuingOwner = false
                     end
                 end
             end
         end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if godblockenabled and not (buyingInProgress or buyingGunInProgress or buyingMaskInProgress) then
+            local char_ = LocalPlayer.Character
+            local be = char_ and char_:FindFirstChild("BodyEffects")
+            if be then
+                local block = be:FindFirstChild("Block")
+                if block then pcall(function() block:Destroy() end) end
+                local tool = char_:FindFirstChildWhichIsA("Tool")
+                if tool and tool:FindFirstChild("Ammo") then
+                    pcall(function() ReplicatedStorage.MainEvent:FireServer("Block", false) end)
+                else
+                    pcall(function() ReplicatedStorage.MainEvent:FireServer("Block", true) end)
+                    task.wait()
+                    pcall(function() ReplicatedStorage.MainEvent:FireServer("Block", false) end)
+                end
+            end
+        end
+        task.wait()
     end
 end)
 
@@ -1610,7 +1768,7 @@ RunService.Heartbeat:Connect(function()
     
     local hasFF       = targetCharacter:FindFirstChildOfClass("ForceField")
     if isKO or isGrabbed or not hrp_ or not targetPart or hasFF then return end
-    if flingonly and target then return end
+    if (flingonly or lflingonly) and target then return end
     local playerChar = game.Players.LocalPlayer.Character
     for _, tool in ipairs(playerChar:GetChildren()) do
         if tool:IsA("Tool") and tool:FindFirstChild("Handle") then
