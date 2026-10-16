@@ -89,7 +89,6 @@ local autosaveenabled  = false
 local asaveOwner        = nil
 local lflingonly       = false
 local danceenabled     = true
-local godblockenabled  = true
 local trashtalkactive = true
 local fpactive = false
 local refreshingfakeposition = false
@@ -102,10 +101,45 @@ local player = game.Players.LocalPlayer
 local character = game.Players.LocalPlayer.Character
 local LocalPlayer = Players.LocalPlayer
 local ReplicatedStorage = game:GetService('ReplicatedStorage')
+getgenv().XZQW_ENABLED = true
+getgenv().YRWL_Connection___ = {}
 pcall(function()
-    local clientAnims = ReplicatedStorage:FindFirstChild("ClientAnimations")
-    if clientAnims and clientAnims:FindFirstChild("Block") then
-        clientAnims.Block.AnimationId = "rbxassetid://0"
+    ReplicatedStorage:WaitForChild("ClientAnimations"):WaitForChild("Block").AnimationId = "rbxassetid://0"
+end)
+local function startAutoBlock()
+    table.insert(getgenv().YRWL_Connection___, RunService.Stepped:Connect(function()
+        if not getgenv().XZQW_ENABLED then return end
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("BodyEffects") then
+            local be = char.BodyEffects
+            if be:FindFirstChild("Block") then be.Block:Destroy() end
+            local tool = char:FindFirstChildWhichIsA("Tool")
+            if tool and tool:FindFirstChild("Ammo") then
+                ReplicatedStorage.MainEvent:FireServer("Block", false)
+            else
+                ReplicatedStorage.MainEvent:FireServer("Block", true)
+                wait()
+                ReplicatedStorage.MainEvent:FireServer("Block", false)
+            end
+        end
+    end))
+end
+
+local function stopAutoBlock()
+    for _, c in ipairs(getgenv().YRWL_Connection___) do c:Disconnect() end
+    table.clear(getgenv().YRWL_Connection___)
+end
+
+startAutoBlock()
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    pcall(function()
+        ReplicatedStorage:WaitForChild("ClientAnimations"):WaitForChild("Block").AnimationId = "rbxassetid://0"
+    end)
+    if getgenv().XZQW_ENABLED then
+        stopAutoBlock()
+        startAutoBlock()
     end
 end)
 local Workspace = game:GetService("Workspace")
@@ -272,9 +306,24 @@ function buyArmorFunc()
     end
     if not cd then return end
     local origCF = hrp.CFrame
-    hrp.CFrame = CFrame.new(headPart.Position + Vector3.new(0, -8, 0))
-    task.wait(0.1); fireclickdetector(cd); task.wait(0.4)
-    if hrp and origCF then hrp.CFrame = origCF end
+    hrp.Anchored = true
+    hrp.Velocity = Vector3.zero
+    hrp.RotVelocity = Vector3.zero
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+    hrp.CFrame = CFrame.new(headPart.Position + Vector3.new(0, 1.5, 0))
+    task.wait(0.15)
+    local attempts = 0
+    while attempts < 15 do
+        local be = char:FindFirstChild("BodyEffects")
+        local armorVal = be and be:FindFirstChild("Armor")
+        if armorVal and armorVal.Value >= 100 then break end
+        fireclickdetector(cd)
+        task.wait(0.2)
+        attempts = attempts + 1
+    end
+    hrp.CFrame = origCF
+    hrp.Anchored = false
 end
 
 function buyMaskLikeGun()
@@ -303,6 +352,13 @@ function buyMaskLikeGun()
     end
     if not cd then return false end
     local origCF = humanoidRootPart.CFrame
+    humanoidRootPart.Anchored = true
+    humanoidRootPart.Velocity = Vector3.zero
+    humanoidRootPart.RotVelocity = Vector3.zero
+    humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+    humanoidRootPart.AssemblyAngularVelocity = Vector3.zero
+    humanoidRootPart.CFrame = CFrame.new(headPart.Position + Vector3.new(0, 1.5, 0))
+    task.wait(0.15)
     local attempts = 0
     while not hasMask() and attempts < 25 do
         char = Player.Character
@@ -311,15 +367,16 @@ function buyMaskLikeGun()
         if not humanoidRootPart then break end
         local hum = char:FindFirstChildOfClass("Humanoid")
         if not hum or hum.Health <= 0 then break end
-        humanoidRootPart.CFrame = CFrame.new(headPart.Position + Vector3.new(0, -8, 0))
-        task.wait(0.1)
         fireclickdetector(cd)
-        task.wait(0.4)
+        task.wait(0.25)
         attempts = attempts + 1
     end
     char = Player.Character
     humanoidRootPart = char and char:FindFirstChild("HumanoidRootPart")
-    if humanoidRootPart and origCF then humanoidRootPart.CFrame = origCF end
+    if humanoidRootPart and origCF then
+        humanoidRootPart.CFrame = origCF
+        humanoidRootPart.Anchored = false
+    end
     return hasMask()
 end
 
@@ -893,9 +950,12 @@ function executeCommand(message, player)
                 autosaveenabled = false
                 asaveOwner = nil
             elseif msgLower == "!godblock on" then
-                godblockenabled = true
+                getgenv().XZQW_ENABLED = true
+                stopAutoBlock()
+                startAutoBlock()
             elseif msgLower == "!godblock off" then
-                godblockenabled = false
+                getgenv().XZQW_ENABLED = false
+                stopAutoBlock()
             elseif msgLower == "!dance on" then
                 danceenabled = true
                 if character then startEmoteLoop() end
@@ -1180,6 +1240,7 @@ local function createMiniCmd()
     box.Size = UDim2.new(1, -45, 1, 0)
     box.Position = UDim2.new(0, 38, 0, 0)
     box.BackgroundTransparency = 1
+    box.Text = ""
     box.PlaceholderText = "Comando (ex: !lfling, !s, !asave on)..."
     box.PlaceholderColor3 = Color3.fromRGB(120, 120, 135)
     box.TextColor3 = Color3.fromRGB(245, 245, 255)
@@ -1707,28 +1768,6 @@ end)
 
 task.spawn(function()
     while true do
-        if godblockenabled and not (buyingInProgress or buyingGunInProgress or buyingMaskInProgress) then
-            local char_ = LocalPlayer.Character
-            local be = char_ and char_:FindFirstChild("BodyEffects")
-            if be then
-                local block = be:FindFirstChild("Block")
-                if block then pcall(function() block:Destroy() end) end
-                local tool = char_:FindFirstChildWhichIsA("Tool")
-                if tool and tool:FindFirstChild("Ammo") then
-                    pcall(function() ReplicatedStorage.MainEvent:FireServer("Block", false) end)
-                else
-                    pcall(function() ReplicatedStorage.MainEvent:FireServer("Block", true) end)
-                    task.wait()
-                    pcall(function() ReplicatedStorage.MainEvent:FireServer("Block", false) end)
-                end
-            end
-        end
-        task.wait()
-    end
-end)
-
-task.spawn(function()
-    while true do
         if killall and not (buyingInProgress or buyingGunInProgress or buyingMaskInProgress) then
             local switchTarget = false
             if lockedTarget and lockedTarget.Character then
@@ -2207,5 +2246,3 @@ pcall(function()
         end)
     end)
 end)
-
--- By KraviX Team: Anni: fuck pussy, Makarov: RUSSIAN #1, Sixsdev: KraviX on TOP BRO
