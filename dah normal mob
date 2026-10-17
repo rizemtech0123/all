@@ -2897,7 +2897,7 @@ do
         return man_old_namecall(self, ...)
     end))
 
-    local ManipulationGroup = Tabs.main:AddRightGroupbox('Bullet Manipulation')
+    local ManipulationGroup = Tabs.main:AddRightGroupbox('Bullet Manipulation (ban risk)')
     ManipulationGroup:AddToggle('ManipulationEnabled', {Text = 'Enable Bullet Manipulation', Default = false})
     ManipulationGroup:AddToggle('ManipulationShowFOV', {Text = 'Show FOV', Default = false})
     ManipulationGroup:AddLabel('FOV Color'):AddColorPicker('ManipulationFOVColor', {Default = Color3.fromRGB(255, 255, 255), Title = 'FOV Color'})
